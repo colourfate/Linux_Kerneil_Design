@@ -1,4 +1,4 @@
-!
+ï»¿!
 ! SYS_SIZE is the number of clicks (16 bytes) to be loaded.
 ! 0x3000 is 0x30000 bytes = 196kB, more than enough for current
 ! versions of linux
@@ -43,19 +43,19 @@ ENDSEG   = SYSSEG + SYSSIZE		! where to stop loading
 ROOT_DEV = 0x306
 
 entry _start
-; ¿½±´0x07C00¿ªÊ¼µÄÄÚÈİµ½0x90000´¦£¬³¤¶ÈÎª512B
-; ¼´: ½«bootsect.s×ÔÉíÒÆ¶¯µ½0x90000´¦
+; æ‹·è´0x07C00å¼€å§‹çš„å†…å®¹åˆ°0x90000å¤„ï¼Œé•¿åº¦ä¸º512B
+; å³: å°†bootsect.sè‡ªèº«ç§»åŠ¨åˆ°0x90000å¤„
 _start:
 	mov	ax,#BOOTSEG
 	mov	ds,ax			; ds=0x07C0
 	mov	ax,#INITSEG
 	mov	es,ax			; es=0x9000
-	mov	cx,#256			; Ñ­»·´ÎÊı256´Î
+	mov	cx,#256			; å¾ªç¯æ¬¡æ•°256æ¬¡
 	sub	si,si			; si=0x0000
 	sub	di,di			; di=0x0000
 	rep
-	movw				; Ò»´ÎmovÒ»¸ö×Ö£¬ds:si-->es:di
-	jmpi	go,INITSEG	; jmpi Îª¶Î¼äÌø×ªÖ¸Áî£¬¼´Ìø×ªµ½go±êºÅ´¦£¬È»ºó½«cs=INITSEG
+	movw				; ä¸€æ¬¡movä¸€ä¸ªå­—ï¼Œds:si-->es:di
+	jmpi	go,INITSEG	; jmpi ä¸ºæ®µé—´è·³è½¬æŒ‡ä»¤ï¼Œå³è·³è½¬åˆ°goæ ‡å·å¤„ï¼Œç„¶åå°†cs=INITSEG
 go:	mov	ax,cs
 	mov	ds,ax
 	mov	es,ax
@@ -65,9 +65,9 @@ go:	mov	ax,cs
 
 ! load the setup-sectors directly after the bootblock.
 ! Note that 'es' is already set up.
-; ½«ÈíÅÌÖĞµÚ¶ş¸öÉÈÇø¿ªÊ¼µÄ4¸öÉÈÇø(setup.s)¿½±´µ½0x90200ÖĞ£¬¸ÕºÃ½ô°¤bootsectµÄ½áÎ²
-; bx: Òª¿½±´µ½µÄÄ¿±êµØÖ·£¬µ±Ç°cs=0x9000£¬ËùÒÔÄ¿µÄµØÖ·ÊÇ0x90200
-; 13ºÅÖĞ¶Ï·şÎñ³ÌĞòÓÉBIOSÌá¹©
+; å°†è½¯ç›˜ä¸­ç¬¬äºŒä¸ªæ‰‡åŒºå¼€å§‹çš„4ä¸ªæ‰‡åŒº(setup.s)æ‹·è´åˆ°0x90200ä¸­ï¼Œåˆšå¥½ç´§æŒ¨bootsectçš„ç»“å°¾
+; bx: è¦æ‹·è´åˆ°çš„ç›®æ ‡åœ°å€ï¼Œå½“å‰cs=0x9000ï¼Œæ‰€ä»¥ç›®çš„åœ°å€æ˜¯0x90200
+; 13å·ä¸­æ–­æœåŠ¡ç¨‹åºç”±BIOSæä¾›
 load_setup:
 	mov	dx,#0x0000		! drive 0, head 0
 	mov	cx,#0x0002		! sector 2, track 0
@@ -139,7 +139,7 @@ root_defined:
 ! after that (everyting loaded), we jump to
 ! the setup-routine loaded directly after
 ! the bootblock:
-; Ìø×ªµ½0x90200£¬¼´setup.s
+; è·³è½¬åˆ°0x90200ï¼Œå³setup.s
 	jmpi	0,SETUPSEG
 
 ! This routine loads the system at address 0x10000, making sure

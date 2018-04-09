@@ -104,15 +104,15 @@ no_disk1:
 is_disk1:
 
 ! now we want to move to protected mode ...
-; ¹ØÖĞ¶Ï
+; å…³ä¸­æ–­
 	cli			! no interrupts allowed !
 
 ! first we move the system to it's rightful place
-; µÚÒ»´Î½«0x10000¿ªÊ¼µÄÄÚºË³ÌĞòÒÆ¶¯µ½0x00000´¦£¬³¤¶ÈÎª64KB£¬½«ÖĞ¶ÏÏòÁ¿±íºÍBIOSÊı¾İÇø¸²¸Ç
-; µÚ¶ş´Î½«0x20000¿ªÊ¼µÄÄÚºË³ÌĞòÒÆ¶¯µ½0x10000´¦£¬³¤¶ÈÎª64KB
+; ç¬¬ä¸€æ¬¡å°†0x10000å¼€å§‹çš„å†…æ ¸ç¨‹åºç§»åŠ¨åˆ°0x00000å¤„ï¼Œé•¿åº¦ä¸º64KBï¼Œå°†ä¸­æ–­å‘é‡è¡¨å’ŒBIOSæ•°æ®åŒºè¦†ç›–
+; ç¬¬äºŒæ¬¡å°†0x20000å¼€å§‹çš„å†…æ ¸ç¨‹åºç§»åŠ¨åˆ°0x10000å¤„ï¼Œé•¿åº¦ä¸º64KB
 ; ...
-; ×ÜµÄÀ´Ëµ¾ÍÊÇ½«0x10000-0x90000µÄÄÚÈİÏòÇ°ÒÆ¶¯ÁË0x10000³¤¶È
-; ´Ë´¦¶ÎµØÖ·Îª0x9000£¬Ö®ËùÒÔ²»Ò»¿ªÊ¼¾Í¿½±´ÄÚºËµ½0x0´¦£¬ÊÇÒòÎªÒªÊ¹ÓÃÖĞ¶Ï·şÎñ³ÌĞò
+; æ€»çš„æ¥è¯´å°±æ˜¯å°†0x10000-0x90000çš„å†…å®¹å‘å‰ç§»åŠ¨äº†0x10000é•¿åº¦
+; æ­¤å¤„æ®µåœ°å€ä¸º0x9000ï¼Œä¹‹æ‰€ä»¥ä¸ä¸€å¼€å§‹å°±æ‹·è´å†…æ ¸åˆ°0x0å¤„ï¼Œæ˜¯å› ä¸ºè¦ä½¿ç”¨ä¸­æ–­æœåŠ¡ç¨‹åº
 	mov	ax,#0x0000
 	cld			! 'direction'=0, movs moves forward
 do_move:
@@ -125,7 +125,7 @@ do_move:
 	sub	si,si
 	mov 	cx,#0x8000
 	rep
-	movsw			; Ò»´Î´«ËÍÒ»¸ö×Ö
+	movsw			; ä¸€æ¬¡ä¼ é€ä¸€ä¸ªå­—
 	jmp	do_move
 
 ! then we load the segment descriptors
@@ -137,10 +137,10 @@ end_move:
 	lgdt	gdt_48		! load gdt with whatever appropriate
 
 ! that was painless, now we enable A20
-
+! A20æ‰“å¼€åï¼Œå¯ä»¥è®¿é—®0x100000-0x10FFEFçš„åœ°å€ï¼Œä¸ä¼šå›æ»š
 	call	empty_8042
 	mov	al,#0xD1		! command write
-	out	#0x64,al
+	out	#0x64,al	 	! è®¿é—®é”®ç›˜æ§åˆ¶å™¨ï¼Œæ‰“å¼€A20
 	call	empty_8042
 	mov	al,#0xDF		! A20 on
 	out	#0x60,al
@@ -153,6 +153,7 @@ end_move:
 ! rectify it afterwards. Thus the bios puts interrupts at 0x08-0x0f,
 ! which is used for the internal hardware interrupts as well. We just
 ! have to reprogram the 8259's, and it isn't fun.
+! å¯¹8085ä¸­æ–­æ§åˆ¶å™¨è¿›è¡Œé‡æ–°ç¼–ç¨‹ï¼Œç©ºå‡º0x00-0x1Fä¸­æ–­å·åšåŒ…å«æ¨¡å¼ä¸‹å†…éƒ¨ä¸­æ–­å’Œå¼‚å¸¸ä¸­æ–­
 
 	mov	al,#0x11		! initialization sequence
 	out	#0x20,al		! send it to 8259A-1
@@ -224,7 +225,7 @@ idt_48:
 gdt_48:
 	.word	0x800		! gdt limit=2048, 256 GDT entries
 	.word	512+gdt,0x9	! gdt base = 0X9xxxx
-						; ÕâÀï 0x9ÊÇ¶ÎµØÖ·£¬512+gdtÊÇÆ«ÒÆÁ¿£¬¼ÓÆğÀ´¾ÍÊÇ0x90200+gdt¸ÕºÃÊÇÇ°Ãægdt±êºÅµÄµØÖ·
+						; è¿™é‡Œ 0x9æ˜¯æ®µåœ°å€ï¼Œ512+gdtæ˜¯åç§»é‡ï¼ŒåŠ èµ·æ¥å°±æ˜¯0x90200+gdtåˆšå¥½æ˜¯å‰é¢gdtæ ‡å·çš„åœ°å€
 .text
 endtext:
 .data
