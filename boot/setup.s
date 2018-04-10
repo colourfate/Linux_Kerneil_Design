@@ -129,7 +129,7 @@ do_move:
 	jmp	do_move
 
 ! then we load the segment descriptors
-
+! 设置中断描述符表（IDT）和全局描述符表（GDT）
 end_move:
 	mov	ax,#SETUPSEG	! right, forgot this at first. didn't work :-)
 	mov	ds,ax
@@ -191,9 +191,17 @@ end_move:
 ! things as simple as possible, we do no register set-up or anything,
 ! we let the gnu-compiled 32-bit programs do that. We just jump to
 ! absolute address 0x00000, in 32-bit protected mode.
+! 切换到保护模式，保护模式下，CS不是代码段基地址，而是代码段选择符
 	mov	ax,#0x0001	! protected mode (PE) bit
 	lmsw	ax		! This is it!
 	jmpi	0,8		! jmp offset 0 of segment 8 (cs)
+
+! IP=0, CS=8=1000, 其中低两位00表示内核特权级第三位0表示GDT，最高位1表示第1项
+! 查看GDT的第1项：
+! 0x 00C0             9A00             0000             07FF
+! 0b 0000000011000000 1001101000000000 0000000000000000 0000011111111111
+! 表示：段基址0x00000000，内核特权级，代码段，段限长0x7FF*4KB=8MB
+! 所以这里实际上是跳转到了0x0处执行，也就是head.s
 
 ! This routine checks that the keyboard command queue is empty
 ! No timeout is used - if this hangs there is something wrong with
@@ -225,7 +233,7 @@ idt_48:
 gdt_48:
 	.word	0x800		! gdt limit=2048, 256 GDT entries
 	.word	512+gdt,0x9	! gdt base = 0X9xxxx
-						; 这里 0x9是段地址，512+gdt是偏移量，加起来就是0x90200+gdt刚好是前面gdt标号的地址
+				; 这里 0x9是段地址，512+gdt是偏移量，加起来就是0x90200+gdt刚好是前面gdt标号的地址
 .text
 endtext:
 .data

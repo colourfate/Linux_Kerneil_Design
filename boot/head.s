@@ -13,23 +13,29 @@
  */
 .text
 .globl idt,gdt,pg_dir,tmp_floppy_area
-pg_dir:
+pg_dir:		# 该标号表示分页机制完成后内核的起始地址
 .globl startup_32
 startup_32:
 	movl $0x10,%eax
-	mov %ax,%ds
-	mov %ax,%es
-	mov %ax,%fs
-	mov %ax,%gs
-	lss stack_start,%esp
+	mov %ax,%ds		# 将ds, es, fs, gs设置为保护模式下的段选择符
+	mov %ax,%es		# 0x10=0b10000，和cs=8意义类似
+	mov %ax,%fs		# 最后两位00表示内核特权级，第三位0表示GDT
+	mov %ax,%gs		# 最高两位10表示第2项
+				# 查看GDT第二项：0x00C0 9200 0000 07FF
+				# 表示段基址0x0，内核级，数据段，段限长8MB
+	lss stack_start,%esp	# stack_start为48位的结构体，其中低32位为栈地址，高16位为0x10
+				# lss将esp=栈地址(0x1E25C)，然后将ss=0x10
 	call setup_idt
-	call setup_gdt
+	call setup_gdt		/* 重新设置全局描述符在head.s(0x0以后)中，
+				* 原来在setup.s(0x90200以后)中，会被缓存区覆盖 */
+	# 为什么要重载？
 	movl $0x10,%eax		# reload all the segment registers
 	mov %ax,%ds		# after changing gdt. CS was already
 	mov %ax,%es		# reloaded in 'setup_gdt'
 	mov %ax,%fs
 	mov %ax,%gs
 	lss stack_start,%esp
+	/* 通过向0x000000写一个数，然后和0x10000比较是否相等来判断A20是否打开 */
 	xorl %eax,%eax
 1:	incl %eax		# check that A20 really IS enabled
 	movl %eax,0x000000	# loop forever if it isn't
@@ -42,6 +48,7 @@ startup_32:
  * 486 users probably want to set the NE (#5) bit also, so as to use
  * int 16 for math errors.
  */
+ 	# 检测x87协处理器是否存在，486不用检测
 	movl %cr0,%eax		# check math chip
 	andl $0x80000011,%eax	# Save PG,PE,ET
 /* "orl $0x10020,%eax" here for 486 might be good */
@@ -82,16 +89,21 @@ setup_idt:
 	movl $0x00080000,%eax
 	movw %dx,%ax		/* selector = 0x0008 = cs */
 	movw $0x8E00,%dx	/* interrupt gate - dpl=0, present */
-
+	/* eax= 0x0008<<16 | ignore_int的低两字节 
+	 * edx= ignore_int的高两字节<<16 | 0x8E00
+	 * 中断描述符见P31，表示中断服务程序偏移地址为ignore_int，段选择符
+	 * 为0x8，P(段存在标志)=1，DPL(特权等级)=00，TYPE(段描述符类型)=0111
+	 */
 	lea idt,%edi
 	mov $256,%ecx
+	/* 将256个中断描述符全部设置为以上内容，即全部指向ignore_int */
 rp_sidt:
 	movl %eax,(%edi)
 	movl %edx,4(%edi)
 	addl $8,%edi
 	dec %ecx
 	jne rp_sidt
-	lidt idt_descr
+	lidt idt_descr		# 设置IDTR寄存器（48位）的值
 	ret
 
 /*
@@ -133,7 +145,10 @@ pg3:
  */
 tmp_floppy_area:
 	.fill 1024,1,0
+# 以下代码会开始建立页表，这段代码在0x5400以后，保证了不会被页表覆盖
 
+# 将L6标号和main函数压栈，栈顶为main函数地址，目的是head程序执行完返回后
+# 可以立即执行main函数，main函数不应该跳出，若跳出则接着执行L6
 after_page_tables:
 	pushl $0		# These are the parameters to main :-)
 	pushl $0
@@ -201,22 +216,33 @@ setup_paging:
 	movl $1024*5,%ecx		/* 5 pages - pg_dir+4 page tables */
 	xorl %eax,%eax
 	xorl %edi,%edi			/* pg_dir is at 0x000 */
-	cld;rep;stosl
+	cld;rep;stosl			/* 清空0x0开始的5K*4B的空间 */
+	/* 将后4个页表地址填写到页目录中 */
 	movl $pg0+7,pg_dir		/* set present bit/user r/w */
 	movl $pg1+7,pg_dir+4		/*  --------- " " --------- */
 	movl $pg2+7,pg_dir+8		/*  --------- " " --------- */
 	movl $pg3+7,pg_dir+12		/*  --------- " " --------- */
+	/* 
+	 * 16MB内存被分为4K页，每页为4KB
+	 * 这里填充pg3的最后一个页表项，指向16MB内存的最后一页(0xfff000) 
+	 * 为了按4字节对齐，这里只取0xfff007的高3位，最低位的7(0x111)
+	 * 表示用户、读写、存在p，若是0(0x000)表示内核，只读，不存在p 
+	 */
 	movl $pg3+4092,%edi
 	movl $0xfff007,%eax		/*  16Mb - 4096 + 7 (r/w user,p) */
 	std
 1:	stosl			/* fill pages backwards - more efficient :-) */
+	/* 开始循环填充，注意这里的pg0存的是0x0，pg0+4存的是0x1000 */
 	subl $0x1000,%eax
 	jge 1b
+	/* 将CR3置零，其中的高20位表示页目录基地址，即pg_dir=0x0为也目录的基地址 */
 	xorl %eax,%eax		/* pg_dir is at 0x0000 */
 	movl %eax,%cr3		/* cr3 - page directory start */
+	/* 将CR0的最高位置1，打开分页机制 */
 	movl %cr0,%eax
 	orl $0x80000000,%eax
 	movl %eax,%cr0		/* set paging (PG) bit */
+	/* EIP=main，跳入main函数执行 */
 	ret			/* this also flushes prefetch-queue */
 
 .align 2
@@ -232,6 +258,7 @@ gdt_descr:
 
 	.align 8
 idt:	.fill 256,8,0		# idt is uninitialized
+				# 在内存中创建256个8字节长区域，初始化为0
 
 gdt:	.quad 0x0000000000000000	/* NULL descriptor */
 	.quad 0x00c09a0000000fff	/* 16Mb */
