@@ -156,6 +156,8 @@ void main(void)		/* This really IS void, no error here. */
     // 其中ROOT_DEV已在前面包含进的fs.h文件中声明为extern int
  	ROOT_DEV = ORIG_ROOT_DEV;
  	drive_info = DRIVE_INFO;        // 复制0x90080处的硬盘参数
+ 	
+ 	/* 1. 根据内存大小设置缓冲区大小，缓冲区后紧接主内存 */
 	memory_end = (1<<20) + (EXT_MEM_K<<10);     // 内存大小=1Mb + 扩展内存(k)*1024 byte
 	memory_end &= 0xfffff000;                   // 忽略不到4kb(1页)的内存数
 	if (memory_end > 16*1024*1024)              // 内存超过16Mb，则按16Mb计
@@ -167,13 +169,14 @@ void main(void)		/* This really IS void, no error here. */
 	else
 		buffer_memory_end = 1*1024*1024;        // 否则设置缓冲区末端=1Mb
 	main_memory_start = buffer_memory_end;
-    // 如果在Makefile文件中定义了内存虚拟盘符号RAMDISK,则初始化虚拟盘。此时主内存将减少。
+	
+    // 2. 如果在Makefile文件中定义了内存虚拟盘符号RAMDISK,则初始化虚拟盘。此时主内存将减少。
 #ifdef RAMDISK
 	main_memory_start += rd_init(main_memory_start, RAMDISK*1024);
 #endif
-    // 以下是内核进行所有方面的初始化工作。阅读时最好跟着调用的程序深入进去看，若实在
-    // 看不下去了，就先放一放，继续看下一个初始化调用。——这是经验之谈。o(∩_∩)o 。;-)
+	/* 3. 对主内存区的管理结构（mem_map）进行设置 */
 	mem_init(main_memory_start,memory_end); // 主内存区初始化。mm/memory.c
+	/* 4. 将ISR与IDT进行挂接 */
 	trap_init();                            // 陷阱门(硬件中断向量)初始化，kernel/traps.c
 	blk_dev_init();                         // 块设备初始化,kernel/blk_drv/ll_rw_blk.c
 	chr_dev_init();                         // 字符设备初始化, kernel/chr_drv/tty_io.c
