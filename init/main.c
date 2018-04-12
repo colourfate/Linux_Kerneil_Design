@@ -133,6 +133,7 @@ static void time_init(void)
 	BCD_TO_BIN(time.tm_mon);
 	BCD_TO_BIN(time.tm_year);
 	time.tm_mon--;                              // tm_mon中月份的范围是0-11
+	/* 设定开机时间，从1970年1月1日0时开始计算 */
 	startup_time = kernel_mktime(&time);        // 计算开机时间。kernel/mktime.c文件
 }
 
@@ -178,17 +179,27 @@ void main(void)		/* This really IS void, no error here. */
 	mem_init(main_memory_start,memory_end); // 主内存区初始化。mm/memory.c
 	/* 4. 将ISR与IDT进行挂接 */
 	trap_init();                            // 陷阱门(硬件中断向量)初始化，kernel/traps.c
+	/* 5. 块设备初始化 */
 	blk_dev_init();                         // 块设备初始化,kernel/blk_drv/ll_rw_blk.c
 	chr_dev_init();                         // 字符设备初始化, kernel/chr_drv/tty_io.c
+	/* 6. 对终端设备进行初始化 */
 	tty_init();                             // tty初始化， kernel/chr_drv/tty_io.c
+	/* 7. 开机启动时间设置 */
 	time_init();                            // 设置开机启动时间 startup_time
+	/* 8. 初始化进程0（设置TSS和LDT）
+	 * 设置系统时钟中断，将系统调用与int 0x80挂接 */
 	sched_init();                           // 调度程序初始化(加载任务0的tr,ldtr)(kernel/sched.c)
     // 缓冲管理初始化，建内存链表等。(fs/buffer.c)
+    /* 9. 初始化缓冲区管理结构 */
 	buffer_init(buffer_memory_end);
+	/* 10. 硬盘初始化 */
 	hd_init();                              // 硬盘初始化，kernel/blk_drv/hd.c
+	/* 11. 软盘初始化 */
 	floppy_init();                          // 软驱初始化，kernel/blk_drv/floppy.c
+	/* 12. 开启中断 */
 	sti();                                  // 所有初始化工作都做完了，开启中断
     // 下面过程通过在堆栈中设置的参数，利用中断返回指令启动任务0执行。
+	/* 13. 进程0由0特权级翻转到3特权级 */
 	move_to_user_mode();                    // 移到用户模式下执行
 	if (!fork()) {		/* we count on this going ok */
 		init();                             // 在新建的子进程(任务1)中执行。

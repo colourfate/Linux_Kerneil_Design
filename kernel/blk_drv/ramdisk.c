@@ -53,11 +53,14 @@ long rd_init(long mem_start, int length)
 {
 	int	i;
 	char	*cp;
-
+	
+	/* 这里DEVICE_REQUEST=do_rd_request，
+	 * 意味着内核可以处理与虚拟盘相关的请求 */
 	blk_dev[MAJOR_NR].request_fn = DEVICE_REQUEST;
 	rd_start = (char *) mem_start;
 	rd_length = length;
 	cp = rd_start;
+	/* 将虚拟磁盘区清零 */
 	for (i=0; i < length; i++)
 		*cp++ = '\0';
 	return(length);

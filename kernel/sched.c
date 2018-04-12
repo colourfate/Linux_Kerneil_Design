@@ -82,8 +82,11 @@ long startup_time=0;                                // 开机时间，从1970:0:
 struct task_struct *current = &(init_task.task);    // 当前任务指针(初始化指向任务0)
 struct task_struct *last_task_used_math = NULL;     // 使用过协处理器任务的指针。
 
+/* task[0]为进程0，也就是INIT_TASK */
 struct task_struct * task[NR_TASKS] = {&(init_task.task), }; // 定义任务指针数组
 
+/* 注意， task[64]结尾紧挨下面的用户栈开始 */
+  
 // 定义用户堆栈，共1K项，容量4K字节。在内核初始化操作过程中被用作内核栈，初始化完成
 // 以后将被用作任务0的用户态堆栈。在运行任务0之前它是内核栈，以后用作任务0和1的用
 // 户态栈。下面结构用于设置堆栈ss:esp(数据的选择符，指针)。ss被设置为内核数据段
@@ -559,10 +562,13 @@ void sched_init(void)
     // 中；gdt是一个描述符表数组(include/linux/head.h)，实际上对应程序head.s中
     // 全局描述符表基址（_gdt）.因此gtd+FIRST_TSS_ENTRY即为gdt[FIRST_TSS_ENTRY](即为gdt[4]),
     // 也即gdt数组第4项的地址。
+    /* 1.1 将TSS的地址传入gdt[4]，TSS已经在INIT_TASK中被初始化好 */
 	set_tss_desc(gdt+FIRST_TSS_ENTRY,&(init_task.task.tss));
+	/* 1.2 将LDT的地址传入gdt[5]，LDT已经在INIT_TASK中被初始化好 */
 	set_ldt_desc(gdt+FIRST_LDT_ENTRY,&(init_task.task.ldt));
     // 清任务数组和描述符表项(注意 i=1 开始，所以初始任务的描述符还在)。描述符项结构
     // 定义在文件include/linux/head.h中。
+    /* 2. 将task[1]和gdt[5]以后的项清零 */
 	p = gdt+2+FIRST_TSS_ENTRY;
 	for(i=1;i<NR_TASKS;i++) {
 		task[i] = NULL;
@@ -575,11 +581,14 @@ void sched_init(void)
     // NT标志用于控制程序的递归调用(Nested Task)。当NT置位时，那么当前中断任务执行
     // iret指令时就会引起任务切换。NT指出TSS中的back_link字段是否有效。
 	__asm__("pushfl ; andl $0xffffbfff,(%esp) ; popfl");        // 复位NT标志
+	/* 3.1 将TR设置为4，这样cpu就能够通过gdt[4]找到TSS的地址，从而找到TSS */
 	ltr(0);
+	/* 3.2 将LDTR设置为5，cpu能够通过gdt[5]找到LDT的地址，从而找到LDT */
 	lldt(0);
     // 下面代码用于初始化8253定时器。通道0，选择工作方式3，二进制计数方式。通道0的
     // 输出引脚接在中断控制主芯片的IRQ0上，它每10毫秒发出一个IRQ0请求。LATCH是初始
     // 定时计数值。
+    /* 4. 设置定时器中断，10ms触发一次。但是由于此时总中断是关的，因此CPU不响应 */
 	outb_p(0x36,0x43);		/* binary, mode 3, LSB/MSB, ch 0 */
 	outb_p(LATCH & 0xff , 0x40);	/* LSB */
 	outb(LATCH >> 8 , 0x40);	/* MSB */
@@ -588,5 +597,6 @@ void sched_init(void)
     // include/asm/system.h中。
 	set_intr_gate(0x20,&timer_interrupt);
 	outb(inb_p(0x21)&~0x01,0x21);
+	/* 5. 设置系统调用总入口 */
 	set_system_gate(0x80,&system_call);
 }

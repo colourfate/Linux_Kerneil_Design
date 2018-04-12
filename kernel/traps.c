@@ -206,6 +206,7 @@ void trap_init(void)
 	int i;
 
     // 设置除操作出错的中断向量值。
+    // 注意：&divide_error是二重指针
 	set_trap_gate(0,&divide_error);
 	set_trap_gate(1,&debug);
 	set_trap_gate(2,&nmi);

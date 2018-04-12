@@ -643,6 +643,7 @@ void con_init(void)
 	
     // 根据显示模式是单色还是彩色分别设置所使用的显示内存起始位置以及显示寄存器
     // 索引端口号和显示寄存器数据端口号。如果原始显示模式等于7，则表示是单色显示器。
+	/* 1. 根据显示器类型选择显示器端口和结束地址 */
 	if (ORIG_VIDEO_MODE == 7)			/* Is this a monochrome display? */
 	{
 		video_mem_start = 0xb0000;      // 设置单显映象内存起始地址
@@ -699,6 +700,7 @@ void con_init(void)
     // 然后我们在屏幕的右上角显示描述字符串。采用的方法是直接将字符串写到显示内存
     // 相应位置处。首先将显示指针display_ptr 指到屏幕第1行右端差4个字符处(每个字符
     // 需2个字节，因此减8)，然后循环复制字符串的字符，并且每复制1个字符都空开1个属性字节。
+	/* 2. 显示字符，注意这里的显存不是像素点，直接将字符写入内存即可， */
 	display_ptr = ((char *)video_mem_start) + video_size_row - 8;
 	while (*display_desc)
 	{
@@ -716,6 +718,7 @@ void con_init(void)
     // 最后初始化当前光标所在位置和光标对应的内存位置pos，并设置键盘中断0x21陷阱门
     // 描述符，&keyboard_interrupt是键盘中断处理过程地址。取消8259A中对键盘中断的
     // 屏蔽，允许响应键盘发出的IRQ1请求信号。最后复位键盘控制器以允许键盘开始正常工作。
+	/* 3. 设置键盘中断，开启键盘 */
 	gotoxy(ORIG_X,ORIG_Y);
 	set_trap_gate(0x21,&keyboard_interrupt);
 	outb_p(inb_p(0x21)&0xfd,0x21);          // 取消对键盘中断的屏蔽，允许IRQ1。
