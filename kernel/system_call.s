@@ -99,6 +99,7 @@ system_call:
 # 调用相应C语言函数的调用函数。这几个寄存器入栈的顺序是由GNU GCC规定的，
 # ebx 中可存放第1个参数，ecx中存放第2个参数，edx中存放第3个参数。
 # 系统调用语句可参见头文件include/unistd.h中的系统调用宏。
+## ds, es设置为0x10，特权级0，GDT第1项
 	pushl %edx
 	pushl %ecx		# push %ebx,%ecx,%edx as parameters
 	pushl %ebx		# to the system call
@@ -107,11 +108,13 @@ system_call:
 	mov %dx,%es
 # fs指向局部数据段(局部描述符表中数据段描述符)，即指向执行本次系统调用的用户程序的数据段。
 # 注意,在Linux 0.11 中内核给任务分配的代码和数据内存段是重叠的，他们的段基址和段限长相同。
+## fs设置为0x17，特权级3，LDT第1项
 	movl $0x17,%edx		# fs points to local data space
 	mov %dx,%fs
 # 下面这句操作数的含义是：调用地址=[_sys_call_table + %eax * 4]
 # sys_call_table[]是一个指针数组，定义在include/linux/sys.h中，该指针数组中设置了所有72
 # 个系统调用C处理函数地址。
+## 这里跳转到不同的系统调用中执行
 	call sys_call_table(,%eax,4)        # 间接调用指定功能C函数
 	pushl %eax                          # 把系统调用返回值入栈
 # 下面几行查看当前任务的运行状态。如果不在就绪状态(state != 0)就去执行调度程序。如果该
@@ -269,7 +272,7 @@ sys_execve:
 # 已满。然后调用copy_process()复制进程。
 .align 2
 sys_fork:
-	call find_empty_process
+	call find_empty_process	# 函数返回值在eax中
 	testl %eax,%eax             # 在eax中返回进程号pid。若返回负数则退出。
 	js 1f
 	push %gs

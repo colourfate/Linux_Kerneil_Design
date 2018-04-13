@@ -35,9 +35,7 @@
 // 以免弄乱堆栈。而在再次执行fork()并执行过execve()函数后，被加载程序已不属于内核空间
 // 因此可以使用写时复制技术了。
 //
-// 下面_syscall0()是unistd.h中的内嵌宏代码。以嵌入汇编的形式调用Linux的系统调用中断
-// 0x80.该中断是所有系统调用的入口。该条语句实际上是int fork()创建进程系统调用。可展
-// 开看之就会立刻明白。syscall0名称中最后的0表示无参数，1表示1个参数。
+/* 通过一个宏来创建函数，_syscall0(int,fork)表示参数为0，返回值为int，函数名为fork */
 static inline _syscall0(int,fork)
 // int pause() 系统调用，暂停进程的执行，直到收到一个信号
 static inline _syscall0(int,pause)

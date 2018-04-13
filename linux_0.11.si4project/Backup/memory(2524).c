@@ -98,14 +98,14 @@ register unsigned long __res asm("ax");
 
 __asm__("std ; repne ; scasb\n\t"   // 置方向位，al(0)与对应每个页面的(di)内容比较
 	"jne 1f\n\t"                    // 如果没有等于0的字节，则跳转结束(返回0).
-	"movb $1,1(%%edi)\n\t"          // [1+edi] = 1,将对应页面引用计数置1.
-	"sall $12,%%ecx\n\t"            // ecx = ecx(页面数)*4k = 页面相对地址
-	"addl %2,%%ecx\n\t"             // ecx += 低端内存地址。ecx=页面实际物理起始地址
-	"movl %%ecx,%%edx\n\t"          // edx = 页面实际物理起始地址
-	"movl $1024,%%ecx\n\t"          // ecx = 1024
-	"leal 4092(%%edx),%%edi\n\t"    // edi = edx+4092（该页面的末端地址）
-	"rep ; stosl\n\t"               // 从edi开始，将内存反向清零，一次清4个字节，清cx次
-	"movl %%edx,%%eax\n"            // eax（返回值）= edx
+	"movb $1,1(%%edi)\n\t"          // 1 => [1+edi],将对应页面内存映像bit位置1.
+	"sall $12,%%ecx\n\t"            // 页面数*4k = 相对页面其实地址
+	"addl %2,%%ecx\n\t"             // 再加上低端内存地址，得页面实际物理起始地址
+	"movl %%ecx,%%edx\n\t"          // 将页面实际其实地址->edx寄存器。
+	"movl $1024,%%ecx\n\t"          // 寄存器ecx置计数值1024
+	"leal 4092(%%edx),%%edi\n\t"    // 将4092+edx的位置->dei（该页面的末端地址）
+	"rep ; stosl\n\t"               // 将edi所指内存清零(反方向，即将该页面清零)
+	"movl %%edx,%%eax\n"            // 将页面起始地址->eax（返回值）
 	"1:"
 	:"=a" (__res)
 	:"0" (0),"i" (LOW_MEM),"c" (PAGING_PAGES),

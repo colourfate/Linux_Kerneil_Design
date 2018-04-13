@@ -129,7 +129,20 @@
 #define __NR_ssetmask	69
 #define __NR_setreuid	70
 #define __NR_setregid	71
-
+/* 下面以_syscall0(int,fork)为例来展开这个宏
+ * int fork(void)
+ * {
+ * long __res;
+ * __asm__ volatile ("int $0x80" \		// 进入0x80中断，特权级从3转到0
+ * 	: "=a" (__res) \					// 中断退出时把eax给__res
+ * 	: "0" (__NR_fork)); \				// 中断进入时将__NR_fork（也就是2）给eax
+ * if (__res >= 0) \
+ * 	return (int) __res; \
+ * errno = -__res; \
+ * return -1; \
+ * }
+ *
+ */
 #define _syscall0(type,name) \
 type name(void) \
 { \

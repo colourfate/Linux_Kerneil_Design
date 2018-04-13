@@ -123,7 +123,6 @@ int copy_process(int nr,long ebp,long edi,long esi,long gs,long none,
     // 然后将新任务结构指针放入任务数组的nr项中。其中nr为任务号，由前面
     // find_empty_process()返回。接着把当前进程任务结构内容复制到刚申请到
     // 的内存页面p开始处。
-    /* 初始化时是获取内存的最高端的一页并清零 */
 	p = (struct task_struct *) get_free_page();
 	if (!p)
 		return -EAGAIN;
