@@ -37,6 +37,7 @@ extern int end;
 extern void put_super(int);
 extern void invalidate_inodes(int);
 
+/* 缓冲区管理结构紧挨内核结尾 */
 struct buffer_head * start_buffer = (struct buffer_head *) &end;
 struct buffer_head * hash_table[NR_HASH];           // NR_HASH ＝ 307项
 static struct buffer_head * free_list;              // 空闲缓冲块链表头指针
@@ -509,12 +510,18 @@ void buffer_init(long buffer_end)
 		b = (void *) (640*1024);
 	else
 		b = (void *) buffer_end;
-    // 这段代码用于初始化缓冲区，建立空闲缓冲区块循环链表，并获取系统中缓冲块数目。
-    // 操作的过程是从缓冲区高端开始划分1KB大小的缓冲块，与此同时在缓冲区低端建立
-    // 描述该缓冲区块的结构buffer_head,并将这些buffer_head组成双向链表。
-    // h是指向缓冲头结构的指针，而h+1是指向内存地址连续的下一个缓冲头地址，也可以说
-    // 是指向h缓冲头的末端外。为了保证有足够长度的内存来存储一个缓冲头结构，需要b所
-    // 指向的内存块地址 >= h 缓冲头的末端，即要求 >= h+1.
+    /* 这里缓冲区大小为4MB，因此b=0x3FFFFF，h=内核代码末尾。
+     * 这里将缓冲区分为了两个部分，一部分是缓冲区管理结构，一部分是缓冲区数据块。
+     * 其中第一部分是一个双向链表（初始化时在内存中连续分布），通过一个节点，
+     * 可以找到一个缓冲区块。第二部分是一系列连续分布的缓冲区块，一个块大小为1KB。
+     * 这里构造缓冲区及其管理结构的流程如下：
+     * 首先h指向缓冲区头，b指向缓冲区尾，然后在h处初始化一个管理结构（buffer_head）
+     * 将其中的b_data指针指向b（最后一个缓冲区块），前向指针指向h-1，后向指针指向h+1
+     * 然后h++，再初始化一个buffer_head，将其中的b_data指向b-1024，同样赋值前后项指针
+     * ......
+     * 当b和h之间不足一个缓冲区块时停止。
+     * void *b; b+1对应地址加1，所以b-1024
+     * buffer_head *h; h+1对应地址加sizeof(buffer_head)，所有h+1即可 */
 	while ( (b -= BLOCK_SIZE) >= ((void *) (h+1)) ) {
 		h->b_dev = 0;                       // 使用该缓冲块的设备号
 		h->b_dirt = 0;                      // 脏标志，即缓冲块修改标志
@@ -534,9 +541,10 @@ void buffer_init(long buffer_end)
 	}
 	h--;                                    // 让h指向最后一个有效缓冲块头
 	free_list = start_buffer;               // 让空闲链表头指向头一个缓冲快
+	/* 修正第一项前向指针，将其指向最后一项，同时将最后一项后向指针指向第一项 */
 	free_list->b_prev_free = h;             // 链表头的b_prev_free指向前一项(即最后一项)。
 	h->b_next_free = free_list;             // h的下一项指针指向第一项，形成一个环链
-    // 最后初始化hash表，置表中所有指针为NULL。
+    /* 最后清空hash表 */
 	for (i=0;i<NR_HASH;i++)
 		hash_table[i]=NULL;
 }	
