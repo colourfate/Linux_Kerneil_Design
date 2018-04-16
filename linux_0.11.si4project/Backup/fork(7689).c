@@ -67,26 +67,25 @@ int copy_mem(int nr,struct task_struct * p)
 	unsigned long old_data_base,new_data_base,data_limit;
 	unsigned long old_code_base,new_code_base,code_limit;
 
-    
-    /* 1. 取得父进程的代码段数据段限长 */
-	code_limit=get_limit(0x0f);
-	data_limit=get_limit(0x17);
-	/* 2. 取得父进程的代码段、数据段基地址 */
-	old_code_base = get_base(current->ldt[1]);
-	old_data_base = get_base(current->ldt[2]);
-	// 由于Linux-0.11内核
+    // 首先取当前进程局部描述符表中代表中代码段描述符和数据段描述符项中的
+    // 的段限长(字节数)。0x0f是代码段选择符：0x17是数据段选择符。然后取
+    // 当前进程代码段和数据段在线性地址空间中的基地址。由于Linux-0.11内核
     // 还不支持代码和数据段分立的情况，因此这里需要检查代码段和数据段基址
     // 和限长是否都分别相同。否则内核显示出错信息，并停止运行。
+	code_limit=get_limit(0x0f);
+	data_limit=get_limit(0x17);
+	old_code_base = get_base(current->ldt[1]);
+	old_data_base = get_base(current->ldt[2]);
 	if (old_data_base != old_code_base)
 		panic("We don't support separate I&D");
 	if (data_limit < code_limit)
 		panic("Bad data_limit");
-    // 接着设置新进程
+    // 然后设置创建中的新进程在线性地址空间中的基地址等于(64MB * 其任务号)，
+    // 并用该值设置新进程局部描述符表中段描述符中的基地址。接着设置新进程
     // 的页目录表项和页表项，即复制当前进程(父进程)的页目录表项和页表项。
     // 此时子进程共享父进程的内存页面。正常情况下copy_page_tables()返回0，
     // 否则表示出错，则释放刚申请的页表项。
-    /* 3. 设置LDT代码段和数据段的基地址 */
-	new_data_base = new_code_base = nr * 0x4000000;		// nr=1, 64MB, 虚拟地址？
+	new_data_base = new_code_base = nr * 0x4000000;
 	p->start_code = new_code_base;
 	set_base(p->ldt[1],new_code_base);
 	set_base(p->ldt[2],new_data_base);
@@ -124,22 +123,19 @@ int copy_process(int nr,long ebp,long edi,long esi,long gs,long none,
     // 然后将新任务结构指针放入任务数组的nr项中。其中nr为任务号，由前面
     // find_empty_process()返回。接着把当前进程任务结构内容复制到刚申请到
     // 的内存页面p开始处。
-    /* 1. 初始化时是获取内存的最高端的一页并清零 */
+    /* 初始化时是获取内存的最高端的一页并清零 */
 	p = (struct task_struct *) get_free_page();
 	if (!p)
 		return -EAGAIN;
 	task[nr] = p;
-	/* 2. 复制当前进程的task_struct 给子进程 */
 	*p = *current;	/* NOTE! this doesn't copy the supervisor stack */
     // 随后对复制来的进程结构内容进行一些修改，作为新进程的任务结构。先将
     // 进程的状态置为不可中断等待状态，以防止内核调度其执行。然后设置新进程
     // 的进程号pid和父进程号father，并初始化进程运行时间片值等于其priority值
     // 接着复位新进程的信号位图、报警定时值、会话(session)领导标志leader、进程
     // 及其子进程在内核和用户态运行时间统计值，还设置进程开始运行的系统时间start_time.
-	/* 3. 设置当前进程状态为：不可中断等待状态 */
 	p->state = TASK_UNINTERRUPTIBLE;
-	/* 4. 子进程的进程id，在find_empty_process()中得到 */
-	p->pid = last_pid;
+	p->pid = last_pid;              // 新进程号。也由find_empty_process()得到。
 	p->father = current->pid;       // 设置父进程
 	p->counter = p->priority;       // 运行时间片值
 	p->signal = 0;                  // 信号位图置0
@@ -154,13 +150,11 @@ int copy_process(int nr,long ebp,long edi,long esi,long gs,long none,
     // 表描述符。下面语句就是把GDT中本任务LDT段描述符和选择符保存在本任务的TSS段中。
     // 当CPU执行切换任务时，会自动从TSS中把LDT段描述符的选择符加载到ldtr寄存器中。
 	p->tss.back_link = 0;
-	/* 5. 将当前进程的内核栈指针指向当前页的末尾 */
-	p->tss.esp0 = PAGE_SIZE + (long) p;
+	p->tss.esp0 = PAGE_SIZE + (long) p;     // 任务内核态栈指针。
 	p->tss.ss0 = 0x10;                      // 内核态栈的段选择符(与内核数据段相同)
-	/* 6. eip在fork函数中调用 int 0x80 时压入栈中，即返回时返回int 0x80的下一行 */
-	p->tss.eip = eip;                       
-	p->tss.eflags = eflags;                 // 与eip同一时间压入栈
-	p->tss.eax = 0;                         // fork返回时就是返回eax
+	p->tss.eip = eip;                       // 指令代码指针
+	p->tss.eflags = eflags;                 // 标志寄存器
+	p->tss.eax = 0;                         // 这是当fork()返回时新进程会返回0的原因所在
 	p->tss.ecx = ecx;
 	p->tss.edx = edx;
 	p->tss.ebx = ebx;
@@ -174,8 +168,7 @@ int copy_process(int nr,long ebp,long edi,long esi,long gs,long none,
 	p->tss.ds = ds & 0xffff;
 	p->tss.fs = fs & 0xffff;
 	p->tss.gs = gs & 0xffff;
-	/* 7. 记录当前进程的LDT在GDT中的偏移量，nr=1，表示gdt[56]（即GDT第7项，LDT1） */
-	p->tss.ldt = _LDT(nr);                  
+	p->tss.ldt = _LDT(nr);                  // 任务局部表描述符的选择符(LDT描述符在GDT中)
 	p->tss.trace_bitmap = 0x80000000;       // 高16位有效
     // 如果当前任务使用了协处理器，就保存其上下文。汇编指令clts用于清除控制寄存器CRO中
     // 的任务已交换(TS)标志。每当发生任务切换，CPU都会设置该标志。该标志用于管理数学协
@@ -189,7 +182,6 @@ int copy_process(int nr,long ebp,long edi,long esi,long gs,long none,
     // 接下来复制进程页表。即在线性地址空间中设置新任务代码段和数据段描述符中的基址和限长，
     // 并复制页表。如果出错(返回值不是0)，则复位任务数组中相应项并释放为该新任务分配的用于
     // 任务结构的内存页。
-    /* 设置子进程的代码段、数据段，创建、复制子进程的第一个页表 */
 	if (copy_mem(nr,p)) {
 		task[nr] = NULL;
 		free_page((long) p);
