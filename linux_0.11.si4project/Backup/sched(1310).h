@@ -52,7 +52,7 @@ struct i387_struct {
 
 struct tss_struct {
 	long	back_link;	/* 16 high bits zero */
-	long	esp0;		// 内核栈指针
+	long	esp0;
 	long	ss0;		/* 16 high bits zero */
 	long	esp1;
 	long	ss1;		/* 16 high bits zero */
@@ -248,7 +248,6 @@ static inline unsigned long _get_base(char * addr)
 
 #define get_base(ldt) _get_base( ((char *)&(ldt)) )
 
-// 获取子进程的段限长，segment表示段选择符，根据segment找到对应的段描述符，然后返回段限长
 #define get_limit(segment) ({ \
 unsigned long __limit; \
 __asm__("lsll %1,%0\n\tincl %0":"=r" (__limit):"r" (segment)); \

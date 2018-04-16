@@ -581,9 +581,9 @@ void sched_init(void)
     // NT标志用于控制程序的递归调用(Nested Task)。当NT置位时，那么当前中断任务执行
     // iret指令时就会引起任务切换。NT指出TSS中的back_link字段是否有效。
 	__asm__("pushfl ; andl $0xffffbfff,(%esp) ; popfl");        // 复位NT标志
-	/* 3.1 将TR设置为4，这样cpu就能够通过gdt[32]（即GDT第4项）找到TSS的地址，从而找到TSS */
+	/* 3.1 将TR设置为4，这样cpu就能够通过gdt[4]找到TSS的地址，从而找到TSS */
 	ltr(0);
-	/* 3.2 将LDTR设置为5，cpu能够通过gdt[40]找到LDT的地址，从而找到LDT */
+	/* 3.2 将LDTR设置为5，cpu能够通过gdt[5]找到LDT的地址，从而找到LDT */
 	lldt(0);
     // 下面代码用于初始化8253定时器。通道0，选择工作方式3，二进制计数方式。通道0的
     // 输出引脚接在中断控制主芯片的IRQ0上，它每10毫秒发出一个IRQ0请求。LATCH是初始

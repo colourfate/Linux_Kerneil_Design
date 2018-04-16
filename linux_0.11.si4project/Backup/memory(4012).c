@@ -101,7 +101,7 @@ __asm__("std ; repne ; scasb\n\t"   // 置方向位，al(0)与对应每个页面
 	"movb $1,1(%%edi)\n\t"          // [1+edi] = 1,将对应页面引用计数置1.
 	"sall $12,%%ecx\n\t"            // ecx = ecx(页面数)*4k = 页面相对地址
 	"addl %2,%%ecx\n\t"             // ecx += 低端内存地址。ecx=页面实际物理起始地址
-	"movl %%ecx,%%edx\n\t"          // edx = ecx = 页面实际物理起始地址
+	"movl %%ecx,%%edx\n\t"          // edx = 页面实际物理起始地址
 	"movl $1024,%%ecx\n\t"          // ecx = 1024
 	"leal 4092(%%edx),%%edi\n\t"    // edi = edx+4092（该页面的末端地址）
 	"rep ; stosl\n\t"               // 从edi开始，将内存反向清零，一次清4个字节，清cx次
@@ -228,31 +228,31 @@ int copy_page_tables(unsigned long from,unsigned long to,long size)
 	unsigned long * from_dir, * to_dir;
 	unsigned long nr;
 
-    /* 1. 线性地址：
-     * 31~22: 页目录偏移 | 21~12: 页表中的偏移 | 11~0: 页内偏移 
-     * 这里要求线性地址from和to的页表偏移和页内偏移为0，只存在页目录偏移 */
+    // 首先检测参数给出的原地址from和目的地址to的有效性。原地址和目的地址都需要
+    // 在4Mb内存边界地址上。否则出错死机。作这样的要求是因为一个页表的1024项可
+    // 管理4Mb内存。源地址from和目的地址to只有满足这个要求才能保证从一个页表的
+    // 第一项开始复制页表项，并且新页表的最初所有项都是有效的。然后取得源地址和
+    // 目的地址的其实目录项指针(from_dir 和 to_dir).再根据参数给出的长度size计
+    // 算要复制的内存块占用的页表数(即目录项数)。
 	if ((from&0x3fffff) || (to&0x3fffff))
 		panic("copy_page_tables called with wrong alignment");
-	/* 2. 取出页目录偏移，然后乘上4，等于在页目录中实际的地址（页目录基地址为0x0）
-	 * 这里，(from>>20)&0xffc = (from>>22)<<2 = 页目录偏移*4 */
 	from_dir = (unsigned long *) ((from>>20) & 0xffc); /* _pg_dir = 0 */
 	to_dir = (unsigned long *) ((to>>20) & 0xffc);
-	/* 3. size是要拷贝的字节数，这里加0x3fffff再>>22保证了size>1，也就是至少拷贝一个页表。
-	 * 一个页表大小为4KB，有1K个页表项，每个页表项指向一个大小为4KB的页面，
-	 * 因此一个页表可以管理4MB的内存，也就是0x400000。>>22即：除以4MB */
 	size = ((unsigned) (size+0x3fffff)) >> 22;
     // 在得到了源起始目录项指针from_dir和目的起始目录项指针to_dir以及需要复制的
     // 页表个数size后，下面开始对每个页目录项依次申请1页内存来保存对应的页表，并
     // 且开始页表项复制操作。如果目的目录指定的页表已经存在(P=1)，则出错死机。
     // 如果源目录项无效，即指定的页表不存在(P=1),则继续循环处理下一个页目录项。
 	for( ; size-->0 ; from_dir++,to_dir++) {
-		if (1 & *to_dir)			// 如何判断？
+		if (1 & *to_dir)
 			panic("copy_page_tables: already exist");
-		if (!(1 & *from_dir))		
+		if (!(1 & *from_dir))
 			continue;
-        /* 4. 取出源页目录项的值，即指向页表的地址               */
+        // 在验证了当前源目录项和目的项正常之后，我们取源目录项中页表地址
+        // from_page_table。为了保存目的目录项对应的页表，需要在住内存区中申请1
+        // 页空闲内存页。如果取空闲页面函数get_free_page()返回0，则说明没有申请
+        // 到空闲内存页面，可能是内存不够。于是返回-1值退出。
 		from_page_table = (unsigned long *) (0xfffff000 & *from_dir);
-		/* 5. 申请一个物理页面 */
 		if (!(to_page_table = (unsigned long *) get_free_page()))
 			return -1;	/* Out of memory, see freeing */
         // 否则我们设置目的目录项信息，把最后3位置位，即当前目录的目录项 | 7，
@@ -262,7 +262,6 @@ int copy_page_tables(unsigned long from,unsigned long to,long size)
         // 针对当前处理的页目录项对应的页表，设置需要复制的页面项数。如果是在内
         // 核空间，则仅需复制头160页对应的页表项(nr=160),对应于开始640KB物理内存
         // 否则需要复制一个页表中的所有1024个页表项(nr=1024)，可映射4MB物理内存。
-        /* 6. 给目标页目录项赋值，并加上权限。这里to_dir=0x40 */
 		*to_dir = ((unsigned long) to_page_table) | 7;
 		nr = (from==0)?0xA0:1024;
         // 此时对于当前页表，开始循环复制指定的nr个内存页面表项。先取出源页表的
