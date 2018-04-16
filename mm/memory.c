@@ -214,11 +214,6 @@ int free_page_tables(unsigned long from,unsigned long size)
  * 1 Mb-range, so the pages can be shared with the kernel. Thus the
  * special case for nr=xxxx.
  */
-//// 复制页目录表项和页表项
-// 复制指定线性地址和长度内存对应的页目录项和页表项，从而被复制的页目录和页表对
-// 应的原物理内存页面区被两套页表映射而共享使用。复制时，需申请新页面来存放新页
-// 表，原物理内存区将被共享。此后两个进程（父进程和其子进程）将共享内存区，直到
-// 有一个进程执行谢操作时，内核才会为写操作进程分配新的内存页(写时复制机制)。
 // 参数from、to是线性地址，size是需要复制（共享）的内存长度，单位是byte.
 int copy_page_tables(unsigned long from,unsigned long to,long size)
 {
@@ -241,53 +236,37 @@ int copy_page_tables(unsigned long from,unsigned long to,long size)
 	 * 一个页表大小为4KB，有1K个页表项，每个页表项指向一个大小为4KB的页面，
 	 * 因此一个页表可以管理4MB的内存，也就是0x400000。>>22即：除以4MB */
 	size = ((unsigned) (size+0x3fffff)) >> 22;
-    // 在得到了源起始目录项指针from_dir和目的起始目录项指针to_dir以及需要复制的
-    // 页表个数size后，下面开始对每个页目录项依次申请1页内存来保存对应的页表，并
-    // 且开始页表项复制操作。如果目的目录指定的页表已经存在(P=1)，则出错死机。
-    // 如果源目录项无效，即指定的页表不存在(P=1),则继续循环处理下一个页目录项。
-	for( ; size-->0 ; from_dir++,to_dir++) {
-		if (1 & *to_dir)			// 如何判断？
+    for( ; size-->0 ; from_dir++,to_dir++) {
+		/* 4. 查看目的页目录项是否存在
+		 * 每一个页目录项的值都是按4KB对齐的，也就都是0x1000的整数倍，
+		 * 其中最后三位是用来表示页属性的，111表示用户、读写、存在，
+		 * 000表示内核、只读、不存在，这里实际上是检测最后一位 */
+		if (1 & *to_dir)			
 			panic("copy_page_tables: already exist");
 		if (!(1 & *from_dir))		
 			continue;
-        /* 4. 取出源页目录项的值，即指向页表的地址               */
+        /* 5. 取出源页目录项的值，即指向页表的地址             
+         * 这里  from_dir=0x0，因此from_page_table=0x1000(第一个页表)*/
 		from_page_table = (unsigned long *) (0xfffff000 & *from_dir);
-		/* 5. 申请一个物理页面 */
+		/* 6. 申请一个物理页面 */
 		if (!(to_page_table = (unsigned long *) get_free_page()))
 			return -1;	/* Out of memory, see freeing */
-        // 否则我们设置目的目录项信息，把最后3位置位，即当前目录的目录项 | 7，
-        // 表示对应页表映射的内存页面是用户级的，并且可读写、存在(Usr,R/W,Present).
-        // (如果U/S位是0，则R/W就没有作用。如果U/S位是1，而R/W是0，那么运行在用
-        // 户层的代码就只能读页面。如果U/S和R/W都置位，则就有读写的权限)。然后
-        // 针对当前处理的页目录项对应的页表，设置需要复制的页面项数。如果是在内
-        // 核空间，则仅需复制头160页对应的页表项(nr=160),对应于开始640KB物理内存
-        // 否则需要复制一个页表中的所有1024个页表项(nr=1024)，可映射4MB物理内存。
-        /* 6. 给目标页目录项赋值，并加上权限。这里to_dir=0x40 */
+        /* 7. 给目标页目录项赋值，并加上页面属性。
+         * 这里to_dir=0x40，表示第160页目录项 */
 		*to_dir = ((unsigned long) to_page_table) | 7;
 		nr = (from==0)?0xA0:1024;
-        // 此时对于当前页表，开始循环复制指定的nr个内存页面表项。先取出源页表的
-        // 内容，如果当前源页表没有使用，则不用复制该表项，继续处理下一项。否则
-        // 复位表项中R/W标志(位1置0)，即让页表对应的内存页面只读。然后将页表项复制
-        // 到目录页表中。
+        /* 8. 复制父进程的页表，也就是把0x1000开始内容复制到倒数第二个
+         * 页中，共复制160个，也就是在0x1000+160*4=0x1280处结束，总共
+         * 着160*4KB=640KB的内存，也就是从0x0开始，到0xA000结束的内存*/
 		for ( ; nr-- > 0 ; from_page_table++,to_page_table++) {
+			// 这是页表项
 			this_page = *from_page_table;
 			if (!(1 & this_page))
 				continue;
+			// 将这个页面改为只读
 			this_page &= ~2;
 			*to_page_table = this_page;
-            // 如果该页表所指物理页面的地址在1MB以上，则需要设置内存页面映射数
-            // 组mem_map[]，于是计算页面号，并以它为索引在页面映射数组相应项中
-            // 增加引用次数。而对于位于1MB以下的页面，说明是内核页面，因此不需
-            // 要对mem_map[]进行设置。因为mem_map[]仅用于管理主内存区中的页面使
-            // 用情况。因此对于内核移动到任务0中并且调用fork()创建任务1时(用于
-            // 运行init())，由于此时复制的页面还仍然都在内核代码区域，因此以下
-            // 判断中的语句不会执行，任务0的页面仍然可以随时读写。只有当调用fork()
-            // 的父进程代码处于主内存区(页面位置大于1MB)时才会执行。这种情况需要
-            // 在进程调用execve()，并装载执行了新程序代码时才会出现。
-            // *from_page_table = this_page; 这句是令源页表项所指内存页也为只读。
-            // 因为现在开始有两个进程公用内存区了。若其中1个进程需要进行写操作，
-            // 则可以通过页异常写保护处理为执行写操作的进程匹配1页新空闲页面，也
-            // 即进行写时复制(copy on write)操作。
+            /* 9. 对1MB以上的页地址进行引用计数 */
 			if (this_page > LOW_MEM) {
 				*from_page_table = this_page;
 				this_page -= LOW_MEM;
@@ -296,6 +275,7 @@ int copy_page_tables(unsigned long from,unsigned long to,long size)
 			}
 		}
 	}
+	/* 10. 重置CR3，刷新"页变换高速缓存" */
 	invalidate();
 	return 0;
 }
