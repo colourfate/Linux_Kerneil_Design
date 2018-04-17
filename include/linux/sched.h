@@ -170,13 +170,20 @@ __asm__("str %%ax\n\t" \
  * This also clears the TS-flag if the task we switched to has used
  * tha math co-processor latest.
  */
+/* 0：段选择符高位
+ * 1：段选择符低位
+ * 2：edx=tss在gdb中的偏移量，也就是段选择符
+ * 3：ecx=要切换的进程
+ * CPU进行任务切换时会找到将进程1的TSS中，然后将其中各寄存器的值以及LDT
+ * 恢复给各寄存器
+ */
 #define switch_to(n) {\
 struct {long a,b;} __tmp; \
-__asm__("cmpl %%ecx,current\n\t" \
-	"je 1f\n\t" \
-	"movw %%dx,%1\n\t" \
-	"xchgl %%ecx,current\n\t" \
-	"ljmp *%0\n\t" \
+__asm__("cmpl %%ecx,current\n\t" \			// 要切换的进程就是当前进程
+	"je 1f\n\t" \							// 退出
+	"movw %%dx,%1\n\t" \					// 段选择符低位=dx=段选择符
+	"xchgl %%ecx,current\n\t" \				// 替换当前进程
+	"ljmp *%0\n\t" \						// 找到进程1的TSS，进程切换
 	"cmpl %%ecx,last_task_used_math\n\t" \
 	"jne 1f\n\t" \
 	"clts\n" \

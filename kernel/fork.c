@@ -81,15 +81,14 @@ int copy_mem(int nr,struct task_struct * p)
 		panic("We don't support separate I&D");
 	if (data_limit < code_limit)
 		panic("Bad data_limit");
-    // 接着设置新进程
-    // 的页目录表项和页表项，即复制当前进程(父进程)的页目录表项和页表项。
-    // 此时子进程共享父进程的内存页面。正常情况下copy_page_tables()返回0，
-    // 否则表示出错，则释放刚申请的页表项。
     /* 3. 设置LDT代码段和数据段的基地址 */
 	new_data_base = new_code_base = nr * 0x4000000;		// nr=1, 64MB, 虚拟地址？
 	p->start_code = new_code_base;
 	set_base(p->ldt[1],new_code_base);
 	set_base(p->ldt[2],new_data_base);
+	/* 4. 将进程0的页表复制到进程1的页表中，也就是将0x1000~0x1280的内容复制
+	 * 到倒数第二个页面的首地址，这段页表管理着160个页，也就是从0x0到0xA000
+	 * 的内容 */
 	if (copy_page_tables(old_data_base,new_data_base,data_limit)) {
 		printk("free_page_tables: from copy_mem\n");
 		free_page_tables(new_data_base,data_limit);
@@ -119,23 +118,15 @@ int copy_process(int nr,long ebp,long edi,long esi,long gs,long none,
 	struct task_struct *p;
 	int i;
 	struct file *f;
-
-    // 首先为新任务数据结构分配内存。如果内存分配出错，则返回出错码并退出。
-    // 然后将新任务结构指针放入任务数组的nr项中。其中nr为任务号，由前面
-    // find_empty_process()返回。接着把当前进程任务结构内容复制到刚申请到
-    // 的内存页面p开始处。
-    /* 1. 初始化时是获取内存的最高端的一页并清零 */
+	
+    /* 1. 初始化时是获取内存的最高端的一页并清零，然后将task[1]赋值，nr为
+     * 任务号，在find_empty_process中获得，这里等于1 */
 	p = (struct task_struct *) get_free_page();
 	if (!p)
 		return -EAGAIN;
 	task[nr] = p;
 	/* 2. 复制当前进程的task_struct 给子进程 */
 	*p = *current;	/* NOTE! this doesn't copy the supervisor stack */
-    // 随后对复制来的进程结构内容进行一些修改，作为新进程的任务结构。先将
-    // 进程的状态置为不可中断等待状态，以防止内核调度其执行。然后设置新进程
-    // 的进程号pid和父进程号father，并初始化进程运行时间片值等于其priority值
-    // 接着复位新进程的信号位图、报警定时值、会话(session)领导标志leader、进程
-    // 及其子进程在内核和用户态运行时间统计值，还设置进程开始运行的系统时间start_time.
 	/* 3. 设置当前进程状态为：不可中断等待状态 */
 	p->state = TASK_UNINTERRUPTIBLE;
 	/* 4. 子进程的进程id，在find_empty_process()中得到 */
@@ -148,11 +139,8 @@ int copy_process(int nr,long ebp,long edi,long esi,long gs,long none,
 	p->utime = p->stime = 0;        // 用户态时间和和心态运行时间
 	p->cutime = p->cstime = 0;      // 子进程用户态和和心态运行时间
 	p->start_time = jiffies;        // 进程开始运行时间(当前时间滴答数)
-    // 再修改任务状态段TSS数据，由于系统给任务结构p分配了1页新内存，所以(PAGE_SIZE+
-    // (long)p)让esp0正好指向该页顶端。ss0:esp0用作程序在内核态执行时的栈。另外，
-    // 每个任务在GDT表中都有两个段描述符，一个是任务的TSS段描述符，另一个是任务的LDT
-    // 表描述符。下面语句就是把GDT中本任务LDT段描述符和选择符保存在本任务的TSS段中。
-    // 当CPU执行切换任务时，会自动从TSS中把LDT段描述符的选择符加载到ldtr寄存器中。
+    // 这里只是对TSS赋值，当CPU执行切换任务时，会自动从TSS中把LDT段描述符
+    // 的选择符加载到ldtr寄存器中（对于进程0是手动加载到TR和LDTR寄存器的）。
 	p->tss.back_link = 0;
 	/* 5. 将当前进程的内核栈指针指向当前页的末尾 */
 	p->tss.esp0 = PAGE_SIZE + (long) p;
@@ -186,18 +174,14 @@ int copy_process(int nr,long ebp,long edi,long esi,long gs,long none,
     // 指定的内存区域中。
 	if (last_task_used_math == current)
 		__asm__("clts ; fnsave %0"::"m" (p->tss.i387));
-    // 接下来复制进程页表。即在线性地址空间中设置新任务代码段和数据段描述符中的基址和限长，
-    // 并复制页表。如果出错(返回值不是0)，则复位任务数组中相应项并释放为该新任务分配的用于
-    // 任务结构的内存页。
-    /* 设置子进程的代码段、数据段，创建、复制子进程的第一个页表 */
+    /* 8. 设置子进程的代码段、数据段，创建、复制子进程的第一个页表 */
 	if (copy_mem(nr,p)) {
 		task[nr] = NULL;
 		free_page((long) p);
 		return -EAGAIN;
 	}
-    // 如果父进程中有文件是打开的，则将对应文件的打开次数增1，因为这里创建的子进程会与父
-    // 进程共享这些打开的文件。将当前进程(父进程)的pwd，root和executable引用次数均增1.
-    // 与上面同样的道理，子进程也引用了这些i节点。
+    /* 9. 如果父进程中打开了某个文件，则该文件的引用计数加一，
+     * 表示有两个进程都打开了这个文件（共享） */
 	for (i=0; i<NR_OPEN;i++)
 		if ((f=p->filp[i]))
 			f->f_count++;
@@ -207,13 +191,10 @@ int copy_process(int nr,long ebp,long edi,long esi,long gs,long none,
 		current->root->i_count++;
 	if (current->executable)
 		current->executable->i_count++;
-    // 随后GDT表中设置新任务TSS段和LDT段描述符项。这两个段的限长均被设置成104字节。
-    // set_tss_desc()和set_ldt_desc()在system.h中定义。"gdt+(nr<<1)+FIRST_TSS_ENTRY"是
-    // 任务nr的TSS描述符项在全局表中的地址。因为每个任务占用GDT表中2项，因此上式中
-    // 要包括'(nr<<1)'.程序然后把新进程设置成就绪态。另外在任务切换时，任务寄存器tr由
-    // CPU自动加载。最后返回新进程号。
+    /* 10. 将进程1的TSS和LDT挂接到GDT中，这里进程1是放到gdt[6]和gdt[7] */
 	set_tss_desc(gdt+(nr<<1)+FIRST_TSS_ENTRY,&(p->tss));
 	set_ldt_desc(gdt+(nr<<1)+FIRST_LDT_ENTRY,&(p->ldt));
+	/* 11. 将进程1改为就绪态 */
 	p->state = TASK_RUNNING;	/* do this last, just in case */
 	return last_pid;
 }
@@ -223,11 +204,6 @@ int find_empty_process(void)
 {
 	int i;
 
-    // 首先获取新的进程号。如果last_pid增1后超出进程号的整数表示范围，则重新从1开始
-    // 使用pid号。然后在任务数组中搜索刚设置的pid号是否已经被任何任务使用。如果是则
-    // 跳转到函数开始出重新获得一个pid号。接着在任务数组中为新任务寻找一个空闲项，并
-    // 返回项号。last_pid是一个全局变量，不用返回。如果此时任务数组中64个项已经被全部
-    // 占用，则返回出错码。
     /* 1. 从1开始查找没有使用的pid值，放在last_pid中 */
 	repeat:
 		if ((++last_pid)<0) last_pid=1;

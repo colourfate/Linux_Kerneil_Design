@@ -111,25 +111,18 @@ system_call:
 ## fs设置为0x17，特权级3，LDT第1项
 	movl $0x17,%edx		# fs points to local data space
 	mov %dx,%fs
-# 下面这句操作数的含义是：调用地址=[_sys_call_table + %eax * 4]
-# sys_call_table[]是一个指针数组，定义在include/linux/sys.h中，该指针数组中设置了所有72
-# 个系统调用C处理函数地址。
-## 这里跳转到不同的系统调用中执行
-	call sys_call_table(,%eax,4)        # 间接调用指定功能C函数
-	pushl %eax                          # 把系统调用返回值入栈
-# 下面几行查看当前任务的运行状态。如果不在就绪状态(state != 0)就去执行调度程序。如果该
-# 任务在就绪状态，但其时间片已用完(counter = 0),则也去执行调度程序。例如当后台进程组中的
-# 进程执行控制终端读写操作时，那么默认条件下该后台进程组所有进程会收到SIGTTIN或SIGTTOU
-# 信号，导致进程组中所有进程处于停止状态。而当前进程则会立刻返回。
-	movl current,%eax                   # 取当前任务(进程)数据结构地址→eax
-	cmpl $0,state(%eax)		# state
+	call sys_call_table(,%eax,4)
+	pushl %eax                          # eax是系统调用的返回值，也就是last_pid
+# 如果不在就绪状态(state != 0)或时间片已用完(counter = 0),则去执行调度程序。
+	movl current,%eax               # current为进程0，也就是init_task
+	cmpl $0,state(%eax)		# eax+state=init_task+0，也就是init_task.task.state的值
 	jne reschedule
-	cmpl $0,counter(%eax)		# counter
+	cmpl $0,counter(%eax)		# init_task.task.counter
 	je reschedule
 # 以下这段代码执行从系统调用C函数返回后，对信号进行识别处理。其他中断服务程序退出时也
 # 将跳转到这里进行处理后才退出中断过程，例如后面的处理器出错中断int 16.
 ret_from_sys_call:
-# 首先判别当前任务是否是初始任务task0,如果是则不比对其进行信号量方面的处理，直接返回。
+# 当前进程时进程0，跳到3处退出
 	movl current,%eax		# task[0] cannot have signals
 	cmpl task,%eax
 	je 3f                   # 向前(forward)跳转到标号3处退出中断处理
@@ -272,8 +265,8 @@ sys_execve:
 # 已满。然后调用copy_process()复制进程。
 .align 2
 sys_fork:
-	call find_empty_process	# 函数返回值在eax中
-	testl %eax,%eax             # 在eax中返回进程号pid。若返回负数则退出。
+	call find_empty_process	# 找到进程号nr，并且找到最小的pid值赋值给last_pid
+	testl %eax,%eax             # 在eax中返回进程号nr。若返回负数则退出。
 	js 1f
 	push %gs
 	pushl %esi
@@ -281,7 +274,7 @@ sys_fork:
 	pushl %ebp
 	pushl %eax
 	call copy_process
-	addl $20,%esp               # 丢弃这里所有压栈内容。
+	addl $20,%esp               # 清除栈中gs、esi、edi、ebp、eax寄存器（前5个）的值
 1:	ret
 
 ### int46 - (int 0x2e)硬盘中断处理程序，响应硬件中断请求IRQ4。

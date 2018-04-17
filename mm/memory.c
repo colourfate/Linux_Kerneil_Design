@@ -92,6 +92,12 @@ static unsigned char mem_map [ PAGING_PAGES ] = {0,};
 // 并没有映射到某个进程的地址空间中去。后面的put_page()函数即用于把指定页面映射
 // 到某个进程地址空间中。当然对于内核使用本函数并不需要再使用put_page()进行映射，
 // 因为内核代码和数据空间（16MB）已经对等地映射到物理地址空间。
+/* 此时内存分布：
+ *  __________________________________
+ * |__|___________|___________________|
+ * ^  ^---USED----^--------0----------^
+ * 0  0x100000    0x600000			  0xFFFFFF
+ */
 unsigned long get_free_page(void)
 {
 register unsigned long __res asm("ax");
@@ -248,7 +254,7 @@ int copy_page_tables(unsigned long from,unsigned long to,long size)
         /* 5. 取出源页目录项的值，即指向页表的地址             
          * 这里  from_dir=0x0，因此from_page_table=0x1000(第一个页表)*/
 		from_page_table = (unsigned long *) (0xfffff000 & *from_dir);
-		/* 6. 申请一个物理页面 */
+		/* 6. 申请一个物理页面，第二个物理页？ */
 		if (!(to_page_table = (unsigned long *) get_free_page()))
 			return -1;	/* Out of memory, see freeing */
         /* 7. 给目标页目录项赋值，并加上页面属性。

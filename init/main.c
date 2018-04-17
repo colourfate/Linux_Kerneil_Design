@@ -196,9 +196,9 @@ void main(void)		/* This really IS void, no error here. */
 	floppy_init();                          // 软驱初始化，kernel/blk_drv/floppy.c
 	/* 12. 开启中断 */
 	sti();                                  // 所有初始化工作都做完了，开启中断
-    // 下面过程通过在堆栈中设置的参数，利用中断返回指令启动任务0执行。
-	/* 13. 进程0由0特权级翻转到3特权级 */
+	/* 13. 进程0由0特权级翻转到3特权级，完成后，本进程正式变为进程0 */
 	move_to_user_mode();                    // 移到用户模式下执行
+	/* 14. 由进程0创建进程1 */
 	if (!fork()) {		/* we count on this going ok */
 		init();                             // 在新建的子进程(任务1)中执行。
 	}
@@ -211,6 +211,7 @@ void main(void)		/* This really IS void, no error here. */
  */
     // pause系统调用会把任务0转换成可中断等待状态，再执行调度函数。但是调度函数只要发现系统中
     // 没有其他任务可以运行是就会切换到任务0，而不依赖于任务0的状态。
+    /* 15. 从进程0调度到进程1，第一次任务调度 */
 	for(;;) pause();
 }
 

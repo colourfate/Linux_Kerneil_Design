@@ -143,7 +143,7 @@ void schedule(void)
 
 /* check alarm, wake up any interruptible tasks that have got a signal */
 
-    // 从任务数组中最后一个任务开始循环检测alarm。在循环时跳过空指针项。
+    /* 1. 反向遍历task[64]，如果指针不为空，则对alarm和signal进行处理 */
 	for(p = &LAST_TASK ; p > &FIRST_TASK ; --p)
 		if (*p) {
             // 如果设置过任务的定时值alarm，并且已经过期(alarm<jiffies)，则在
@@ -168,9 +168,8 @@ void schedule(void)
 		next = 0;
 		i = NR_TASKS;
 		p = &task[NR_TASKS];
-        // 这段代码也是从任务数组的最后一个任务开始循环处理，并跳过不含任务的数组槽。比较
-        // 每个就绪状态任务的counter(任务运行时间的递减滴答计数)值，哪一个值大，运行时间还
-        // 不长，next就值向哪个的任务号。
+        /* 2. 再次遍历所有进程，找出就绪态进程中counter最大的进程，并记录其进程号到next中
+         * 这里只有进程0和进程1，而进程0处于可中断等待状态，因此next =1                         */
 		while (--i) {
 			if (!*--p)
 				continue;
@@ -189,7 +188,8 @@ void schedule(void)
 	}
     // 用下面的宏把当前任务指针current指向任务号Next的任务，并切换到该任务中运行。上面Next
     // 被初始化为0。此时任务0仅执行pause()系统调用，并又会调用本函数。
-	switch_to(next);     // 切换到Next任务并运行。
+    /* 3. 切换到next进程运行 */
+	switch_to(next);
 }
 
 // 转换当前任务状态为可中断的等待状态，并重新调度。
@@ -198,6 +198,8 @@ void schedule(void)
 // pause()返回值应该是-1，并且errno被置为EINTR。这里还没有完全实现(直到0.95版)
 int sys_pause(void)
 {
+	/* 将进程设置为可中断等待状态，如果产生某种中断，或其他进程给这个进程发送特定信号，
+	 * 才有可能将这个进程改为就绪态 */
 	current->state = TASK_INTERRUPTIBLE;
 	schedule();
 	return 0;
@@ -581,9 +583,10 @@ void sched_init(void)
     // NT标志用于控制程序的递归调用(Nested Task)。当NT置位时，那么当前中断任务执行
     // iret指令时就会引起任务切换。NT指出TSS中的back_link字段是否有效。
 	__asm__("pushfl ; andl $0xffffbfff,(%esp) ; popfl");        // 复位NT标志
-	/* 3.1 将TR设置为4，这样cpu就能够通过gdt[32]（即GDT第4项）找到TSS的地址，从而找到TSS */
+	/* 3.1 将TR设置为32=0x20=0b100000，特权级0，GDT，第4项
+	 * 这样cpu就能够通过gdt[4]找到TSS的地址，从而找到TSS */
 	ltr(0);
-	/* 3.2 将LDTR设置为5，cpu能够通过gdt[40]找到LDT的地址，从而找到LDT */
+	/* 3.2 将LDTR设置为40，cpu能够通过gdt[5]找到LDT的地址，从而找到LDT */
 	lldt(0);
     // 下面代码用于初始化8253定时器。通道0，选择工作方式3，二进制计数方式。通道0的
     // 输出引脚接在中断控制主芯片的IRQ0上，它每10毫秒发出一个IRQ0请求。LATCH是初始
