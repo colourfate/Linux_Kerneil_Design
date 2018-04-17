@@ -162,7 +162,8 @@ int copy_process(int nr,long ebp,long edi,long esi,long gs,long none,
 	p->tss.ds = ds & 0xffff;
 	p->tss.fs = fs & 0xffff;
 	p->tss.gs = gs & 0xffff;
-	/* 7. 记录当前进程的LDT在GDT中的偏移量，nr=1，表示gdt[56]（即GDT第7项，LDT1） */
+	/* 7. 记录当前进程的LDT在GDT中的偏移量，即段选择符，nr=1，_LDT(1)=56=0x38=0b00111000
+	 * 特权级3，GDT，第7项 */
 	p->tss.ldt = _LDT(nr);                  
 	p->tss.trace_bitmap = 0x80000000;       // 高16位有效
     // 如果当前任务使用了协处理器，就保存其上下文。汇编指令clts用于清除控制寄存器CRO中
