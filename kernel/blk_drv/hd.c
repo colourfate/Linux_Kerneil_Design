@@ -191,6 +191,7 @@ static void hd_out(unsigned int drive,unsigned int nsect,unsigned int sect,
 		panic("Trying to write bad sector");
 	if (!controller_ready())
 		panic("HD controller not ready");
+	/* 把读或写硬盘函数与中断服务程序挂接，在system_call.s的第307行 */
 	do_hd = intr_addr;
 	outb_p(hd_info[drive].ctl,HD_CMD);
 	port=HD_DATA;
@@ -305,6 +306,7 @@ void do_hd_request(void)
 	/* 1. 确保CURRENT存在，这里CURRENT=blk_dev[3].current_request
 	 * current_request在ll_rw_blk.c中的add_request()函数中赋值 */
 	INIT_REQUEST;
+	/* CURRENT->dev=0x300，CURRENT->sector=0，dev=0，block=0 */
 	dev = MINOR(CURRENT->dev);
 	block = CURRENT->sector;
 	if (dev >= 5*NR_HD || block+2 > hd[dev].nr_sects) {
@@ -312,15 +314,18 @@ void do_hd_request(void)
 		goto repeat;
 	}
 	/* 2. 得到实际扇区地址和设备号，hd_info[2]和hd[10]在hd.c中的sys_setup()函数中赋值
-	 * 其中hd_info保存的是BIOS给的硬件信息 */
+	 * 其中hd_info保存的是BIOS给的硬件信息， hd[dev].start_sect=0  */
 	block += hd[dev].start_sect;
 	dev /= 5;
+	/* 3. block = block / hd_info[dev].sect
+	 *	  sec = block % hd_info[dev].sect
+	 * 	这里%4是指从第一个冒号开始数的第四个数 */
 	__asm__("divl %4":"=a" (block),"=d" (sec):"0" (block),"1" (0),
 		"r" (hd_info[dev].sect));
 	__asm__("divl %4":"=a" (cyl),"=d" (head):"0" (block),"1" (0),
 		"r" (hd_info[dev].head));
 	sec++;
-	nsect = CURRENT->nr_sectors;
+	nsect = CURRENT->nr_sectors;		// =2
 	if (reset) {
 		reset = 0;
 		recalibrate = 1;
@@ -343,6 +348,7 @@ void do_hd_request(void)
 		}
 		port_write(HD_DATA,CURRENT->buffer,256);
 	} else if (CURRENT->cmd == READ) {
+		/* 4. 下达读硬盘指令 */
 		hd_out(dev,nsect,sec,head,cyl,WIN_READ,&read_intr);
 	} else
 		panic("unknown hd-command");
