@@ -258,7 +258,7 @@ int copy_page_tables(unsigned long from,unsigned long to,long size)
 		if (!(to_page_table = (unsigned long *) get_free_page()))
 			return -1;	/* Out of memory, see freeing */
         /* 7. 给目标页目录项赋值，并加上页面属性。
-         * 这里to_dir=0x40，表示第160页目录项 */
+         * 这里to_dir=0x40，表示第16页目录项 */
 		*to_dir = ((unsigned long) to_page_table) | 7;
 		nr = (from==0)?0xA0:1024;
         /* 8. 复制父进程的页表，也就是把0x1000开始内容复制到倒数第二个

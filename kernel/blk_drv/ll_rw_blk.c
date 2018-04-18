@@ -70,8 +70,10 @@ static void add_request(struct blk_dev_struct * dev, struct request * req)
 	if (req->bh)
 		req->bh->b_dirt = 0;
 	if (!(tmp = dev->current_request)) {
+		/* 1. 这里是将设置好的request挂接到blk_dev[3]上 */
 		dev->current_request = req;
 		sti();
+		/* 2. 执行请求，这里是do_hd_request */
 		(dev->request_fn)();
 		return;
 	}
@@ -102,6 +104,7 @@ static void make_request(int major,int rw, struct buffer_head * bh)
 	}
 	if (rw!=READ && rw!=WRITE)
 		panic("Bad block dev command, must be R/W/RA/WA");
+	/* 1. 缓冲区加锁 */
 	lock_buffer(bh);
 	if ((rw == WRITE && !bh->b_dirt) || (rw == READ && bh->b_uptodate)) {
 		unlock_buffer(bh);
@@ -117,6 +120,7 @@ repeat:
 	else
 		req = request+((NR_REQUEST*2)/3);
 /* find an empty request */
+	/* 2. 找到空闲请求 */
 	while (--req >= request)
 		if (req->dev<0)
 			break;
@@ -130,6 +134,7 @@ repeat:
 		goto repeat;
 	}
 /* fill up the request-info, and add it to the queue */
+	/* 3. 填充请求项 */
 	req->dev = bh->b_dev;
 	req->cmd = rw;
 	req->errors=0;
@@ -139,6 +144,8 @@ repeat:
 	req->waiting = NULL;
 	req->bh = bh;
 	req->next = NULL;
+	/* 4. 向请求队列中加载该请求项，这里是blk_dev[3]，
+	 * 其中blk_dev[3].request_fn已经和do_hd_request挂接 */
 	add_request(major+blk_dev,req);
 }
 
@@ -146,6 +153,7 @@ void ll_rw_block(int rw, struct buffer_head * bh)
 {
 	unsigned int major;
 
+	// 查看设备号是否存在，以及请求项是否挂接
 	if ((major=MAJOR(bh->b_dev)) >= NR_BLK_DEV ||
 	!(blk_dev[major].request_fn)) {
 		printk("Trying to read nonexistent block-device\n\r");

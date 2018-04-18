@@ -198,7 +198,7 @@ void main(void)		/* This really IS void, no error here. */
 	sti();                                  // 所有初始化工作都做完了，开启中断
 	/* 13. 进程0由0特权级翻转到3特权级，完成后，本进程正式变为进程0 */
 	move_to_user_mode();                    // 移到用户模式下执行
-	/* 14. 由进程0创建进程1 */
+	/* 14. 由进程0创建进程1，进程0和进程1都会执行这里，进程0跳过，进程1执行init */
 	if (!fork()) {		/* we count on this going ok */
 		init();                             // 在新建的子进程(任务1)中执行。
 	}

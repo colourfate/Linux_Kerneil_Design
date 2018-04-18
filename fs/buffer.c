@@ -191,20 +191,23 @@ void check_disk_change(int dev)
 static inline void remove_from_queues(struct buffer_head * bh)
 {
 /* remove from hash-queue */
+	/* 1. 第一次进入，bh->b_next和bh->b_prev都为NULL */
 	if (bh->b_next)
 		bh->b_next->b_prev = bh->b_prev;
 	if (bh->b_prev)
 		bh->b_prev->b_next = bh->b_next;
     // 如果该缓冲区是该队列的头一个块，则让hash表的对应项指向本队列中的下一个
     // 缓冲区。
+    /* 2. 现在不会出现该情况 */
 	if (hash(bh->b_dev,bh->b_blocknr) == bh)
 		hash(bh->b_dev,bh->b_blocknr) = bh->b_next;
 /* remove from free list */
 	if (!(bh->b_prev_free) || !(bh->b_next_free))
 		panic("Free block list corrupted");
+	/* 3. 从链表中删除该节点 */
 	bh->b_prev_free->b_next_free = bh->b_next_free;
 	bh->b_next_free->b_prev_free = bh->b_prev_free;
-    // 如果空闲链表头指向本缓冲区，则让其指向下一缓冲区。
+    // 4. 如果空闲链表头指向本缓冲区，则让其指向下一缓冲区。
 	if (free_list == bh)
 		free_list = bh->b_next_free;
 }
@@ -213,6 +216,7 @@ static inline void remove_from_queues(struct buffer_head * bh)
 static inline void insert_into_queues(struct buffer_head * bh)
 {
 /* put at end of free list */
+	/* 1. 插入链表尾部 */
 	bh->b_next_free = free_list;
 	bh->b_prev_free = free_list->b_prev_free;
 	free_list->b_prev_free->b_next_free = bh;
@@ -221,12 +225,16 @@ static inline void insert_into_queues(struct buffer_head * bh)
     // 请注意当hash表某项第1次插入项时，hash()计算值肯定为Null，因此此时得到
     // 的bh->b_next肯定是NULL，所以应该在bh->b_next不为NULL时才能给b_prev赋
     // bh值。
+    /* 2. 将空闲块挂接到hash_table上 */
 	bh->b_prev = NULL;
 	bh->b_next = NULL;
 	if (!bh->b_dev)
 		return;
+	// 这里hash(...)=hash_table[154]=NULL
 	bh->b_next = hash(bh->b_dev,bh->b_blocknr);
+	/* hash_table[154] = bh */
 	hash(bh->b_dev,bh->b_blocknr) = bh;
+	// 这句怎么回事？NULL->b_prev？这样就修改了页目录
 	bh->b_next->b_prev = bh;                // 此句前应添加"if (bh->b_next)"判断
 }
 
@@ -236,7 +244,7 @@ static struct buffer_head * find_buffer(int dev, int block)
 {		
 	struct buffer_head * tmp;
 
-    // 搜索hash表，寻找指定设备号和块号的缓冲块。
+    // 搜索hash表，寻找指定设备号和块号的缓冲块，第一次进入时hash(dev,block)=NULL
 	for (tmp = hash(dev,block) ; tmp != NULL ; tmp = tmp->b_next)
 		if (tmp->b_dev==dev && tmp->b_blocknr==block)
 			return tmp;
@@ -250,14 +258,13 @@ static struct buffer_head * find_buffer(int dev, int block)
  * will force it bad). This shouldn't really happen currently, but
  * the code is ready.
  */
-//// 利用hash表在高速缓冲区中寻找指定的缓冲块。若找到则对该缓冲块上锁
-// 返回块头指针。
+// 查找hash表，确定缓冲区中是否有指定的dev、block的缓冲块
 struct buffer_head * get_hash_table(int dev, int block)
 {
 	struct buffer_head * bh;
 
 	for (;;) {
-        // 在高速缓冲中寻找给定设备和指定块的缓冲区块，如果没有找到则返回NULL。
+        // 第一次使用，缓冲区为空，一定返回NULL
 		if (!(bh=find_buffer(dev,block)))
 			return NULL;
         // 对该缓冲块增加引用计数，并等待该缓冲块解锁。由于经过了睡眠状态，
@@ -281,16 +288,14 @@ struct buffer_head * get_hash_table(int dev, int block)
  */
 // 下面宏用于同时判断缓冲区的修改标志和锁定标志，并且定义修改标志的权重要比锁定标志大。
 #define BADNESS(bh) (((bh)->b_dirt<<1)+(bh)->b_lock)
-//// 取高速缓冲中指定的缓冲块
-// 检查指定（设备号和块号）的缓冲区是否已经在高速缓冲中。如果指定块已经在
-// 高速缓冲中，则返回对应缓冲区头指针退出；如果不在，就需要在高速缓冲中设置一个
-// 对应设备号和块好的新项。返回相应的缓冲区头指针。
+// 在缓冲区中得到与dev、block相符合或空闲的缓冲块
 struct buffer_head * getblk(int dev,int block)
 {
 	struct buffer_head * tmp, * bh;
 
 repeat:
     // 搜索hash表，如果指定块已经在高速缓冲中，则返回对应缓冲区头指针，退出。
+    /* 1. 第一次进入，hash表中为NULL */
 	if ((bh = get_hash_table(dev,block)))
 		return bh;
     // 扫描空闲数据块链表，寻找空闲缓冲区。
@@ -304,6 +309,7 @@ repeat:
         // 但b_lock不等于0；当一个任务执行breada()预读几个块时，只要ll_rw_block()
         // 命令发出后，它就会递减b_count; 但此时实际上硬盘访问操作可能还在进行，
         // 因此此时b_lock=1, 但b_count=0.
+        /* 2. 如果正在被使用，跳过，第一次进入tmp->b_count=0 */
 		if (tmp->b_count)
 			continue;
         // 如果缓冲头指针bh为空，或者tmp所指缓冲头的标志(修改、锁定)权重小于bh
@@ -311,6 +317,7 @@ repeat:
         // 没有修改也没有锁定标志置位，则说明已为指定设备上的块取得对应的高速
         // 缓冲块，则退出循环。否则我们就继续执行本循环，看看能否找到一个BANDNESS()
         // 最小的缓冲块。
+        /* 3. bh=0, BADNESS(tmp)=00, 找到空闲的缓冲块 */
 		if (!bh || BADNESS(tmp)<BADNESS(bh)) {
 			bh = tmp;
 			if (!BADNESS(tmp))
@@ -327,6 +334,7 @@ repeat:
 	}
     // 执行到这里，说明我们已经找到了一个比较合适的空闲缓冲块了。于是先等待该缓冲区
     // 解锁。如果在我们睡眠阶段该缓冲区又被其他任务使用的话，只好重复上述寻找过程。
+    /* 4. 缓冲区没有加锁，不用等待 */
 	wait_on_buffer(bh);
 	if (bh->b_count)
 		goto repeat;
@@ -342,6 +350,7 @@ repeat:
 /* already have added "this" block to the cache. check it */
     // 在高速缓冲hash表中检查指定设备和块的缓冲块是否乘我们睡眠之际已经被加入
     // 进去。如果是的话，就再次重复上述寻找过程。
+    /* 5. 新申请的缓冲块没有挂接到hash中，跳过 */
 	if (find_buffer(dev,block))
 		goto repeat;
 /* OK, FINALLY we know that this buffer is the only one of it's kind, */
@@ -353,9 +362,12 @@ repeat:
     // 从hash队列和空闲队列块链表中移出该缓冲区头，让该缓冲区用于指定设备和
     // 其上的指定块。然后根据此新的设备号和块号重新插入空闲链表和hash队列新
     // 位置处。并最终返回缓冲头指针。
+    /* 6. 先从链表中删除这个管理结构 */
 	remove_from_queues(bh);
+	/* 7. 修改这个结构的一些值 */
 	bh->b_dev=dev;
 	bh->b_blocknr=block;
+	/* 8. 重新插入链表尾部，并让hash_table[154]指向这个结构 */
 	insert_into_queues(bh);
 	return bh;
 }
@@ -376,25 +388,22 @@ void brelse(struct buffer_head * buf)
  * bread() reads a specified block and returns the buffer that contains
  * it. It returns NULL if the block was unreadable.
  */
-//// 从设备上读取数据块。
-// 该函数根据指定的设备号 dev 和数据块号 block，首先在高速缓冲区中申请一块
-// 缓冲块。如果该缓冲块中已经包含有有效的数据就直接返回该缓冲块指针，否则
-// 就从设备中读取指定的数据块到该缓冲块中并返回缓冲块指针。
+/* 读指定dev、block，第一块硬盘的dev是0x300，block是0 */
 struct buffer_head * bread(int dev,int block)
 {
 	struct buffer_head * bh;
 
-    // 在高速缓冲区中申请一块缓冲块。如果返回值是NULL，则表示内核出错，停机。
-    // 然后我们判断其中说是否已有可用数据。如果该缓冲块中数据是有效的（已更新）
-    // 可以直接使用，则返回。
+    /* 1. 在缓冲区中得到与dev、block相符合或空闲的缓冲块 */
 	if (!(bh=getblk(dev,block)))
 		panic("bread: getblk returned NULL\n");
+	// 新申请的缓冲区没有更新过
 	if (bh->b_uptodate)
 		return bh;
     // 否则我们就调用底层快设备读写ll_rw_block函数，产生读设备块请求。然后
     // 等待指定数据块被读入，并等待缓冲区解锁。在睡眠醒来之后，如果该缓冲区已
     // 更新，则返回缓冲区头指针，退出。否则表明读设备操作失败，于是释放该缓
     // 冲区，返回NULL，退出。
+    /* 2. 将缓冲块与请求项结构相挂接 */
 	ll_rw_block(READ,bh);
 	wait_on_buffer(bh);
 	if (bh->b_uptodate)

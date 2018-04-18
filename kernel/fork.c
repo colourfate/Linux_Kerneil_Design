@@ -81,13 +81,14 @@ int copy_mem(int nr,struct task_struct * p)
 		panic("We don't support separate I&D");
 	if (data_limit < code_limit)
 		panic("Bad data_limit");
-    /* 3. 设置LDT代码段和数据段的基地址 */
-	new_data_base = new_code_base = nr * 0x4000000;		// nr=1, 64MB, 虚拟地址？
+    /* 3. 设置LDT代码段和数据段的基地址，为0x4000000，这是线性地址，解析出来就是：
+     * 页目录项：16，页表项：0，页内偏移：0*/
+	new_data_base = new_code_base = nr * 0x4000000;		// nr=1
 	p->start_code = new_code_base;
 	set_base(p->ldt[1],new_code_base);
 	set_base(p->ldt[2],new_data_base);
 	/* 4. 将进程0的页表复制到进程1的页表中，也就是将0x1000~0x1280的内容复制
-	 * 到倒数第二个页面的首地址，这段页表管理着160个页，也就是从0x0到0xA000
+	 * 到倒数第二个页面的首地址，这段页表管理着160个页，也就是从0x0到0xA0000
 	 * 的内容 */
 	if (copy_page_tables(old_data_base,new_data_base,data_limit)) {
 		printk("free_page_tables: from copy_mem\n");
