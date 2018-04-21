@@ -40,6 +40,7 @@ static int dupfd(unsigned int fd, unsigned int arg)
     // 否则针对找到的空闲项(句柄)，在执行时关闭标志位图close_on_exec中复位该句
     // 柄位。即在运行exec()类函数时，不会关闭用dup()创建的句柄。并令该文件结构
     // 指针等于原句柄fd的指针，并且将文件引用计数增1，最后返回新的文件句柄arg.
+    /* 复制文件句柄，建立标准输出设备，并增加相应文件引用计数 */
 	current->close_on_exec &= ~(1<<arg);
 	(current->filp[arg] = current->filp[fd])->f_count++;
 	return arg;

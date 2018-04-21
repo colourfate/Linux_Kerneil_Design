@@ -320,7 +320,10 @@ unsigned long put_page(unsigned long page,unsigned long address)
     // 取得指定页表地址放到page_table 变量中。否则就申请一空闲页面给页表使用，并
     // 在对应目录项中置相应标志(7 - User、U/S、R/W).然后将该页表地址放到page_table
     // 变量中。
+    /* 1. 计算address在页目录表中对应的表项 */
 	page_table = (unsigned long *) ((address>>20) & 0xffc);
+	/* 2. 如果该页目录项已经有对应的页表，就获取该页表的地址
+	 * 如果没有重新申请一个页面，然后指向该页面地址*/
 	if ((*page_table)&1)
 		page_table = (unsigned long *) (0xfffff000 & *page_table);
 	else {
@@ -332,6 +335,7 @@ unsigned long put_page(unsigned long page,unsigned long address)
     // 最后在找到的页表page_table中设置相关页表内容，即把物理页面page的地址填入
     // 表项同时置位3个标志(U/S、W/R、P)。该页表项在页表中索引值等于线性地址位21
     // -- 位12组成的10bit的值。每个页表共可有1024项(0 -- 0x3ff)。
+    /* 3. 将页面地址写到页表中，完成映射 */
 	page_table[(address>>12) & 0x3ff] = page | 7;
 /* no need for invalidate */
 	return page;
@@ -618,6 +622,7 @@ void do_no_page(unsigned long error_code,unsigned long address)
 
     // 首先取线性空间中指定地址address处页面地址。从而可算出指定线性地址在进程
     // 空间相对于进程基地址的偏移长度值tmp，即对应的逻辑地址。
+    /* 页内偏移量清零 */
 	address &= 0xfffff000;
 	tmp = address - current->start_code;
     // 若当进程的executable节点指针空，或者指定地址超出(代码+数据)长度，则申请
@@ -629,12 +634,15 @@ void do_no_page(unsigned long error_code,unsigned long address)
     // 并映射到指定线性地址处。进程任务结构字段start_code是线性地址空间中进程代
     // 码段地址，字段end_data是代码加数据长度。对于Linux0.11内核，它的代码段和
     // 数据段其实基址相同。
+    /* 1. 不是加载程序导致的缺页，直接申请页面，然后返回 */
 	if (!current->executable || tmp >= current->end_data) {
 		get_empty_page(address);
 		return;
 	}
+	/* 2. 尝试是否能和其他程序共享 */
 	if (share_page(tmp))
 		return;
+	/* 3. 为shell程序申请一页新的内存 */
 	if (!(page = get_free_page()))
 		oom();
 /* remember that 1 block is used for header */
@@ -647,8 +655,9 @@ void do_no_page(unsigned long error_code,unsigned long address)
 	block = 1 + tmp/BLOCK_SIZE;
 	for (i=0 ; i<4 ; block++,i++)
 		nr[i] = bmap(current->executable,block);
+	/* 4. 读取4个逻辑块（1页）的shell程序内容到刚申请的内存页面 */
 	bread_page(page,current->executable->i_dev,nr);
-    // 在读设备逻辑块操作时，可能会出现这样一种情况，即在执行文件中的读取页面位
+    // 5. 在读设备逻辑块操作时，可能会出现这样一种情况，即在执行文件中的读取页面位
     // 置可能离文件尾不到1个页面的长度。因此就可能读入一些无用的信息，下面的操作
     // 就是把这部分超出执行文件end_data以后的部分清零处理。
 	i = tmp + 4096 - current->end_data;
@@ -659,6 +668,7 @@ void do_no_page(unsigned long error_code,unsigned long address)
 	}
     // 最后把引起缺页异常的一页物理页面映射到指定线性地址address处。若操作成功
     // 就返回。否则就释放内存页，显示内存不够。
+    /* 6. 建立页目录表，页表，页面的三级映射关系 */
 	if (put_page(page,address))
 		return;
 	free_page(page);

@@ -156,6 +156,7 @@ void schedule(void)
             // 如果信号位图中除被阻塞的信号外还有其他信号，并且任务处于可中断状态，则
             // 置任务为就绪状态。其中'~(_BLOCKABLE & (*p)->blocked)'用于忽略被阻塞的信号，但
             // SIGKILL 和SIGSTOP不能呗阻塞。
+            /* a. 发现进程1接收到了信号，并且处于可中断等待状态，将进程1设置为就绪态 */
 			if (((*p)->signal & ~(_BLOCKABLE & (*p)->blocked)) &&
 			(*p)->state==TASK_INTERRUPTIBLE)
 				(*p)->state=TASK_RUNNING;
@@ -170,6 +171,7 @@ void schedule(void)
 		p = &task[NR_TASKS];
         /* 2. 再次遍历所有进程，找出就绪态进程中counter最大的进程，并记录其进程号到next中
          * 这里只有进程0和进程1，而进程0处于可中断等待状态，因此next =1                         */
+        /* b. 只有进程1处于就绪态，next=1 */
 		while (--i) {
 			if (!*--p)
 				continue;

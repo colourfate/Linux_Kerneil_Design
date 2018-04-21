@@ -98,6 +98,8 @@ int sys_read(unsigned int fd,char * buf,int count)
 	inode = file->f_inode;
 	if (inode->i_pipe)
 		return (file->f_mode&1)?read_pipe(inode,buf,count):-EIO;
+	/* 2. /dev/tty0为字符设备文件，进入rw_char执行，shell进程将被设置为可中断等待状态，
+	 * 这样所有的进程都处于等待状态，再次切换到进程0中取运行，系统实现怠速*/
 	if (S_ISCHR(inode->i_mode))
 		return rw_char(READ,inode->i_zone[0],buf,count,&file->f_pos);
 	if (S_ISBLK(inode->i_mode))
@@ -106,6 +108,7 @@ int sys_read(unsigned int fd,char * buf,int count)
     // 读去字节数加上文件当前读写指针值大于文件长度，则重新设置读取字节数为文件长度
     // -当前读写指针值，若读取数等于0，则返回0退出)，然后执行文件读操作，返回读取的
     // 字节数并退出。
+    /* 1. /etc/rc是普通文件，返回-ERROR退出 */
 	if (S_ISDIR(inode->i_mode) || S_ISREG(inode->i_mode)) {
 		if (count+file->f_pos > inode->i_size)
 			count = inode->i_size - file->f_pos;
