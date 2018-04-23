@@ -299,8 +299,10 @@ int sys_mount(char * dev_name, char * dir_name, int rw_flag)
     // 首先根据设备文件名找到对应的i节点，以取得其中的设备号。对于块特殊设备文件，
     // 设备号在其i节点的i_zone[0]中。另外，由于文件凶必须在块设备中，因此如果不是
     // 块设备文件，则放回刚取得的i节点dev_i，返回出错码。
+	/* 1. 通过设备名，获取i节点 */
 	if (!(dev_i=namei(dev_name)))
 		return -ENOENT;
+	/* 2. 获取其中的设备号 */
 	dev = dev_i->i_zone[0];
 	if (!S_ISBLK(dev_i->i_mode)) {
 		iput(dev_i);
@@ -312,6 +314,7 @@ int sys_mount(char * dev_name, char * dir_name, int rw_flag)
     // 或者该i节点的节点号是根文件系统的节点号1，则放回该i节点的返回出错码。另外，如果
     // 该节点不是一个目录文件节点，则也放回该i节点，返回出错码。因为文件系统只能安装
     // 在一个目录名上。
+    /* 3. 释放i节点 */
 	iput(dev_i);
 	if (!(dir_i=namei(dir_name)))
 		return -ENOENT;
@@ -326,6 +329,7 @@ int sys_mount(char * dev_name, char * dir_name, int rw_flag)
     // 现在安装点也检查完毕，我们开始读取要安装文件系统的超级块信息。如果读取超级块操
     // 作失败，则返回该安装点i节点的dir_i并返回出错码。一个文件系统的超级块首先从超级
     // 块表中进行搜索，如果不在超级块表中就从设备上读取。
+    // 4. 通过设备号读取设备超级块
 	if (!(sb=read_super(dev))) {
 		iput(dir_i);
 		return -EBUSY;

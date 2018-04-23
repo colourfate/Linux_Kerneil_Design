@@ -30,6 +30,7 @@ static int dupfd(unsigned int fd, unsigned int arg)
 		return -EINVAL;
     // 然后在当前进程的文件结构指针数组中寻找索引号等于或大于arg，但还没有使用
     // 的项。若找到的新句柄值arg大于最多打开文件数(即没有空闲项)，则返回出错码并退出。
+    /* 1. 在进程1的filp[20]中寻找空闲项 */
 	while (arg < NR_OPEN)
 		if (current->filp[arg])
 			arg++;
@@ -40,7 +41,7 @@ static int dupfd(unsigned int fd, unsigned int arg)
     // 否则针对找到的空闲项(句柄)，在执行时关闭标志位图close_on_exec中复位该句
     // 柄位。即在运行exec()类函数时，不会关闭用dup()创建的句柄。并令该文件结构
     // 指针等于原句柄fd的指针，并且将文件引用计数增1，最后返回新的文件句柄arg.
-    /* 复制文件句柄，建立标准输出设备，并增加相应文件引用计数 */
+    /* 2. 复制文件句柄，建立标准输出设备，并增加相应文件引用计数 */
 	current->close_on_exec &= ~(1<<arg);
 	(current->filp[arg] = current->filp[fd])->f_count++;
 	return arg;
