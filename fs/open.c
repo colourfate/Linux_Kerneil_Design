@@ -306,6 +306,7 @@ int sys_close(unsigned int fd)
 	if (fd >= NR_OPEN)
 		return -EINVAL;
 	current->close_on_exec &= ~(1<<fd);
+	/* 1. 获取进程2标准输入文件指针 */
 	if (!(filp = current->filp[fd]))
 		return -EINVAL;
     // 现在置该文件句柄的文件结构指针为NULL。若在关闭文件之前，对应文件结构中的
@@ -313,9 +314,11 @@ int sys_close(unsigned int fd)
     // 减1.此时如果它还不为0，则说明有其他进程正在使用该文件，于是返回0（成功）。
     // 如果引用计数等于0，说明该文件已经没有进程引用，该文件结构已变为空闲。则
     // 释放该文件i节点，返回0.
+    /* 2. 进程2与该设备文件解除关联 */
 	current->filp[fd] = NULL;
 	if (filp->f_count == 0)
 		panic("Close: file count is 0");
+	/* 3. 引用计数减1 */
 	if (--filp->f_count)
 		return (0);
 	iput(filp->f_inode);

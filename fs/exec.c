@@ -280,12 +280,15 @@ int do_execve(unsigned long * eip,long tmp,char * filename,
     // 128KB的参数和环境串空间，把所有字节清零，并取出执行文件的i节点。再根据函
     // 数参数分别计算出命令行参数和环境字符串的个数argc和envc。另外，执行文件必
     // 须是常规文件。
+    /* 1. 通过检测特权级来判断是非是内核调用了该函数 */
 	if ((0xffff & eip[1]) != 0x000f)
 		panic("execve called from supervisor mode");
 	for (i=0 ; i<MAX_ARG_PAGES ; i++)	/* clear page-table */
 		page[i]=0;
+	/* 2. 获取shell所在文件节点 */
 	if (!(inode=namei(filename)))		/* get executables inode */
 		return -ENOENT;
+	/* 3. 统计参数个数和环境变量个数 */
 	argc = count(argv);
 	envc = count(envp);
 	
@@ -303,6 +306,7 @@ restart_interp:
     // 行文件set-group-id被置位的话，则执行进程的有效组ID（egid）就被设置为执行
     // 文件的组ID。否则设置成当前进程的egid。这里暂时把这两个判断出来的值保存在
     // 变量e_uid和e_gid中。
+    /* 3. 通过i节点的uid和gid来判断进程2是否有权限执行shell程序 */
 	i = inode->i_mode;                      // 取文件属性字段
 	e_uid = (i & S_ISUID) ? inode->i_uid : current->euid;
 	e_gid = (i & S_ISGID) ? inode->i_gid : current->egid;
@@ -319,6 +323,7 @@ restart_interp:
 		i >>= 6;
 	else if (current->egid == inode->i_gid)
 		i >>= 3;
+	/* 4. 如果没有权限则退出 */
 	if (!(i & 1) &&
 	    !((inode->i_mode & 0111) && suser())) {
 		retval = -ENOEXEC;
@@ -339,11 +344,14 @@ restart_interp:
     // 我们需要跳转去执行，因此在下面确认处并处理了脚本文件之后需要设置一个禁止
     // 再次执行下面的脚本处理代码标志sh_bang。在后面的代码中该标志也用来表示我
     // 们已经设置好执行的命令行参数，不用重复设置。
+    /* 5. 通过i节点将文件头读取当缓冲区当中 */
 	if (!(bh = bread(inode->i_dev,inode->i_zone[0]))) {
 		retval = -EACCES;
 		goto exec_error2;
 	}
+	/* 6. 从缓冲块中获取文件头信息 */
 	ex = *((struct exec *) bh->b_data);	/* read exec-header */
+	// 判断文件并非脚本文件，if中内容不执行
 	if ((bh->b_data[0] == '#') && (bh->b_data[1] == '!') && (!sh_bang)) {
 		/*
 		 * This section does the #! interpretation.
@@ -462,6 +470,7 @@ restart_interp:
     // + 数据段+堆）长度超过50MB、或者执行文件长度小于（代码段+数据段+符号表长度
     // +执行头部分）长度的总和。
 	brelse(bh);
+	/* 7. 检测shell文件内容是否符合规定 */
 	if (N_MAGIC(ex) != ZMAGIC || ex.a_trsize || ex.a_drsize ||
 		ex.a_text+ex.a_data+ex.a_bss>0x3000000 ||
 		inode->i_size < ex.a_text+ex.a_data+ex.a_syms+N_TXTOFF(ex)) {
@@ -471,6 +480,7 @@ restart_interp:
     // 另外，如果执行文件中代码开始处没有位于1个页面(1024字节)边界处，则也不能
     // 执行。因为需求页(Demand paging)技术要求加载执行文件内容时以页面为单位，
     // 因此要求执行文件映象中代码和数据都从页面边界处开始。
+    /* 8. 如果文件头大小不等于1024B，也不执行 */
 	if (N_TXTOFF(ex) != BLOCK_SIZE) {
 		printk("%s: N_TXTOFF != BLOCK_SIZE. See a.out.h.", filename);
 		retval = -ENOEXEC;
@@ -483,6 +493,7 @@ restart_interp:
     // 执行完后，环境参数串信息块位于程序参数串信息块上方，并且p指向程序的第1个
     // 参数串。事实上，p是128KB参数和环境空间中的偏移值。因此如果p=0，则表示环
     // 境变量与参数空间页面已经被占满，容纳不下了。
+    /* 9. 将环境变量和参数复制到进程空间 */
 	if (!sh_bang) {
 		p = copy_strings(envc,envp,page,p,0);
 		p = copy_strings(argc,argv,page,p,0);
@@ -511,6 +522,7 @@ restart_interp:
     // 这里我们首先放回进程原执行程序的i节点，并且让进程executable字段指向新执行
     // 文件的i节点。然后复位原进程的所有信号处理句柄。再根据设定的执行时关闭文件
     // 句柄（close_on_exec）位图标志，关闭指定的打开文件，并复位该标志。
+    /* 10. 检测进程是否有对应的可执行程序 */
 	if (current->executable)
 		iput(current->executable);
 	current->executable = inode;
@@ -526,6 +538,7 @@ restart_interp:
     // 存管理程序执行缺页处理而为新执行文件申请内存页面和设置相关表项，并且把相
     // 关执行文件页面读入内存中。如果“上次任务使用了协处理器”指向的是当前进程，
     // 则将其置空，并复位使用了协处理器的标志。
+    /* 11. 解除进程2与进程1的页面关系 */
 	free_page_tables(get_base(current->ldt[1]),get_limit(0x0f));
 	free_page_tables(get_base(current->ldt[2]),get_limit(0x17));
 	if (last_task_used_math == current)
@@ -536,13 +549,17 @@ restart_interp:
     // 语句之后，p此时更改成以数据段起始处为原点的偏移值，但仍指向参数和环境空
     // 间数据开始处，即已转换成为栈指针值。然后调用内部函数create_tables()在栈中
     // 穿件环境和参数变量指针表，供程序的main()作为参数使用，并返回该栈指针。
+    /* 12. 重新设置页面2的局部描述符表 */
 	p += change_ldt(ex.a_text,page)-MAX_ARG_PAGES*PAGE_SIZE;
+	/* 13. 在进程的新栈空间中创建参数和环境变量指针管理表 */
 	p = (unsigned long) create_tables((char *)p,argc,envc);
     // 接着再修改各字段值为新执行文件的信息。即令进程任务结构代码尾字段end_code
     // 等于执行文件的代码长度a_text；数据尾字段end_data等于执行文件的代码段长度
     // 加数据段长度(a_data+a_text)；并令进程堆结尾字段brk=a_text+a_data+a_bss.
     // brk用于指明进程当前数据段（包括未初始化数据部分）末端位置。然后设置进程
     // 栈开始字段为栈指针所在页面，并重新设置进程的有效用户id和有效组id。
+    /* 14. 设置进程代码段尾字段end_code、进程数据段尾字段end_data、进程堆结尾字段brk
+     * 栈底位置字段start_stack、有效用户id euid和有效组ID egid，最后再将BSS段清零 */
 	current->brk = ex.a_bss +
 		(current->end_data = ex.a_data +
 		(current->end_code = ex.a_text));
@@ -557,6 +574,9 @@ restart_interp:
     // 最后将原调用系统中断的程序在堆栈上的代码指针替换为指向新执行程序的入口点，
     // 并将栈指针替换为执行文件的栈指针。此后返回指令将这些栈数据并使得CPU去执
     // 行新执行文件，因此不会返回到原调用系统中断的程序中去了。
+    /* 15. 设置进程2开始执行的eip和栈顶指针esp，eip指向栈中存放EIP的位置
+     * 由于该线性空间对应的程序内容未加载，也因此会触发一个"页异常"中断，
+     * 跳转到page.s/page_fault中执行 */
 	eip[0] = ex.a_entry;		/* eip, magic happens :-) */
 	eip[3] = p;			/* stack pointer */
 	return 0;

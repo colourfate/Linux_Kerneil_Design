@@ -121,6 +121,7 @@ static void tell_father(int pid)
 				continue;
 			if (task[i]->pid != pid)
 				continue;
+			/* 给父进程发送SIGCHLD信号 */
 			task[i]->signal |= (1<<(SIGCHLD-1));
 			return;
 		}
@@ -143,9 +144,10 @@ int do_exit(long code)
     // 的选择符(0x17是进城数据段的选择符)。即在取段基地址时使用该段的描述符所处地址作为
     // 参数，取段长度时使用该段的选择符作为参数。free_page_tables()函数位于mm/memory.c
     // 文件中。
+    /* 1. 释放shell进程代码段和数据段所占据的内存页面 */
 	free_page_tables(get_base(current->ldt[1]),get_limit(0x0f));
 	free_page_tables(get_base(current->ldt[2]),get_limit(0x17));
-    // 如果当前进程有子进程，就将子进程的father置为1(其父进程改为进程1，即init进程)。
+    // 2. 如果当前进程有子进程，就将子进程的father置为1(其父进程改为进程1，即init进程)。
     // 如果该子进程已经处于僵死(ZOMBIE)状态，则向进程1发送子进程中止信号SIGCHLD。
 	for (i=0 ; i<NR_TASKS ; i++)
 		if (task[i] && task[i]->father == current->pid) {
@@ -154,7 +156,7 @@ int do_exit(long code)
 				/* assumption task[1] is always init */
 				(void) send_sig(SIGCHLD, task[1], 1);
 		}
-    // 关闭当前进程打开着的所有文件。
+    // 3. 关闭当前进程打开着的所有文件。
 	for (i=0 ; i<NR_OPEN ; i++)
 		if (current->filp[i])
 			sys_close(i);
@@ -175,12 +177,13 @@ int do_exit(long code)
     // 如果当前进程是leader进程，则终止该会话的所有相关进程。
 	if (current->leader)
 		kill_session();
-    // 把当前进程置为僵死状态，表明当前进程已经释放了资源。并保存将由父进程读取的退出码。
+    // 4. 把当前进程置为僵死状态，表明当前进程已经释放了资源。并保存将由父进程读取的退出码。
 	current->state = TASK_ZOMBIE;
 	current->exit_code = code;
-    // 通知父进程，也即向父进程发送信号SIGCHLD - 子进程将停止或终止。
+    // 5. 通知父进程，也即向父进程发送信号SIGCHLD - 子进程将停止或终止。
 	tell_father(current->father);
-	schedule();                     // 重新调度进程运行，以让父进程处理僵死其他的善后事宜。
+	// 6. 重新调度进程运行，以让父进程处理僵死其他的善后事宜。
+	schedule();                     
     // 下面的return语句仅用于去掉警告信息。因为这个函数不返回，所以若在函数名前加关键字
     // volatile，就可以告诉gcc编译器本函数不会返回的特殊情况。这样可让gcc产生更好一些的代码，
     // 并且可以不用再写return语句也不会产生假警告信息。
@@ -219,6 +222,7 @@ repeat:
 	for(p = &LAST_TASK ; p > &FIRST_TASK ; --p) {
 		if (!*p || *p == current)
 			continue;
+		/* 1. 筛选出当前进程的子进程，此时就是进程2 */
 		if ((*p)->father != current->pid)
 			continue;
         // 此时扫描选择到的进程p肯定是当前进程的子进程。
@@ -242,6 +246,7 @@ repeat:
         // 此时所选择到的进程p或者是其进程号等于指定pid，或者是当前进程组中的任何子进程，或者
         // 是进程号等于指定pid绝对值的子进程，或者是任何子进程(此时指定的pid等于-1).接下来根据
         // 这个子进程p所处的状态来处理。
+        /* 2. 判断进程2的状态，进程2此时是就绪态 */
 		switch ((*p)->state) {
             // 子进程p处于停止状态时，如果此时WUNTRACED标志没有置位，表示程序无须立刻返回，于是
             // 继续扫描处理其他进程。如果WUNTRACED置位，则把状态信息0x7f放入*stat_addr，并立刻
@@ -253,6 +258,7 @@ repeat:
 				return (*p)->pid;
             // 如果子进程p处于僵死状态，则首先把它在用户态和内核态运行的时间分别累计到当前进程
             // (父进程)中，然后取出子进程的pid和退出码，并释放该子进程。最后返回子进程的退出码和pid.
+			/* 5. 即将退出的进程2（shell进程）处于僵死状态 */
 			case TASK_ZOMBIE:
 				current->cutime += (*p)->utime;
 				current->cstime += (*p)->stime;
@@ -273,11 +279,13 @@ repeat:
     // 立刻返回0，退出。否则把当前进程置为可中断等待状态并重新执行调度。当又开始执行本进程时，
     // 如果本进程没有收到除SIGCHLD以外的信号，则还是重复处理。否则，返回出错码‘中断系统调用’
     // 并退出。针对这个出错号用户程序应该再继续调用本函数等待子进程。
+    /* 3. 进程1设置为等待状态，切换到进程2中运行，也就是跳转到进程1调用fork后 */
 	if (flag) {
 		if (options & WNOHANG)                  // options = WNOHANG,则立刻返回。
 			return 0;
 		current->state=TASK_INTERRUPTIBLE;      // 置当前进程为可中断等待态
 		schedule();                             // 重新调度。
+		/* 4. 退出进程2，检测到SIGCHLD信号量，重新处理子进程退出的问题 */
 		if (!(current->signal &= ~(1<<(SIGCHLD-1))))
 			goto repeat;
 		else
