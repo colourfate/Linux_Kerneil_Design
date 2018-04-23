@@ -84,14 +84,18 @@ void rd_load(void)
 		return;
 	printk("Ram disk: %d bytes, starting at 0x%x\n", rd_length,
 		(int) rd_start);
+	/* 1. 如果根设备不是软盘，退出 */
 	if (MAJOR(ROOT_DEV) != 2)
 		return;
+	/* 2. 从根设备中连续地读出一些块 */
 	bh = breada(ROOT_DEV,block+1,block,block+2,-1);
 	if (!bh) {
 		printk("Disk error while looking for ramdisk!\n");
 		return;
 	}
+	/* 3. 备份超级块 */
 	*((struct d_super_block *) &s) = *((struct d_super_block *) bh->b_data);
+	/* 4. 释放超级块所在缓冲区 */
 	brelse(bh);
 	if (s.s_magic != SUPER_MAGIC)
 		/* No ram disk image present, assume normal floppy boot */
@@ -104,7 +108,10 @@ void rd_load(void)
 	}
 	printk("Loading %d bytes into ram disk... 0000k", 
 		nblocks << BLOCK_SIZE_BITS);
+	// 在main.c的rd_init()函数中赋值，等于虚拟盘的开始地址
 	cp = rd_start;
+	/* 5. 读软盘中的数据，并且copy到虚拟盘中，将软盘上准备格式化用的
+	 * 文件系统复制到虚拟盘上*/
 	while (nblocks) {
 		if (nblocks > 2) 
 			bh = breada(ROOT_DEV, block, block+1, block+2, -1);
@@ -124,5 +131,6 @@ void rd_load(void)
 		i++;
 	}
 	printk("\010\010\010\010\010done \n");
+	/* 6. 将虚拟盘设置为根设备 */
 	ROOT_DEV=0x0101;
 }

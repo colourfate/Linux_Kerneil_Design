@@ -351,6 +351,7 @@ static struct m_inode * get_dir(const char * pathname)
     // 如果当前进程没有设定根i节点，或者该进程根i节点指向是一个空闲i节点（引用为0），
     // 则系统出错停机。如果进程的当前工作目录i节点指针为空，或者该当前工作目录
     // 指向的i节点是一个空闲i节点，这也是系统有问题，停机。
+    /* 1. 当前进程的根i节点或工作目录i节点不存在，死机 */
 	if (!current->root || !current->root->i_count)
 		panic("No root inode");
 	if (!current->pwd || !current->pwd->i_count)
@@ -360,6 +361,7 @@ static struct m_inode * get_dir(const char * pathname)
     // 应从进程的当前工作目录开始操作。则取进程当前工作目录的i节点。如果路径
     // 名为空，则出错返回NULL退出。此时变量inode指向了正确的i节点 -- 进程的
     // 根i节点或当前工作目录i节点之一。
+    /* 2. 识别出"/dev/tty0"第一个字符是'/'，pathname指向'd' */
 	if ((c=get_fs_byte(pathname))=='/') {
 		inode = current->root;
 		pathname++;
@@ -389,8 +391,10 @@ static struct m_inode * get_dir(const char * pathname)
         // 注意！如果路径名中最后一个名称也是一个目录名，但其后面没有加上'/'字符，
         // 则函数不会返回该最后目录的i节点！例如：对于路径名/usr/src/linux，该函数
         // 将只返回src/目录名的i节点。
+        /* 3. 获取thisname的长度，第一次c指向't'，第二次c指向'\0' */
 		for(namelen=0;(c=get_fs_byte(pathname++))&&(c!='/');namelen++)
 			/* nothing */ ;
+		/* 7. 第二次从这里退出 */
 		if (!c)
 			return inode;
         // 在得到当前目录名部分（或文件名）后，我们调用查找目录项函数find_entry()在
@@ -398,14 +402,17 @@ static struct m_inode * get_dir(const char * pathname)
         // NULL退出。然后在找到的目录项中取出其i节点号inr和设备号idev，释放包含该目录
         // 项的高速缓冲块并放回该i节点。然后去节点号inr的i节点inode，并以该目录项为
         // 当前目录继续循环处理路径名中的下一目录名部分（或文件名）。
+        /* 4. 通过目录文件的i节点和目录项信息，获取目录项 */
 		if (!(bh = find_entry(&inode,thisname,namelen,&de))) {
 			iput(inode);
 			return NULL;
 		}
+		/* 5. 通过目录项找到i节点号和设备号 */
 		inr = de->inode;                        // 当前目录名部分的i节点号
 		idev = inode->i_dev;
 		brelse(bh);
 		iput(inode);
+		/* 6. 将i节点号和设备号保存在table_inode[32]指定的表项内 */
 		if (!(inode = iget(idev,inr)))          // 取i节点内容。
 			return NULL;
 	}
@@ -431,12 +438,15 @@ static struct m_inode * dir_namei(const char * pathname,
     // 最后一个'/'字符后面的名字字符串，计算其长度，并且返回最顶层目录的i节点指针。
     // 注意！如果路径名最后一个字符是斜杠字符'/'，那么返回的目录名为空，并且长度为0.
     // 但返回的i节点指针仍然指向最后一个'/'字符钱目录名的i节点。
+	/* 1. 获取枝梢节点，即'dev'所在的inode */
 	if (!(dir = get_dir(pathname)))
 		return NULL;
 	basename = pathname;
+	/* 2. 逐个遍历"/dev/tty0"字符串，basename指向第二个'/' */
 	while ((c=get_fs_byte(pathname++)))
 		if (c=='/')
 			basename=pathname;
+	/* 3. 获取'tty0'的长度和首地址 */
 	*namelen = pathname-basename-1;
 	*name = basename;
 	return dir;
@@ -523,10 +533,7 @@ int open_namei(const char * pathname, int flag, int mode,
 		flag |= O_WRONLY;
 	mode &= 0777 & ~current->umask;
 	mode |= I_REGULAR;
-    // 然后根据指定的路径名寻找对应的i节点，以及最顶端目录名及其长度。此时如果最顶端目录
-    // 名长度为0（例如'/usr/'这种路径名的情况），那么若操作不是读写、创建和文件长度截0，
-    // 则表示是在打开一个目录名文件操作。于是直接返回该目录的i节点并返回0退出。否则说明
-    // 进程操作非法，于是放回该i节点，返回出错码。
+    /* 1. 获取枝梢i节点，即'dev'所在inode，namelen=3，basename指向'tty0' */
 	if (!(dir = dir_namei(pathname,&namelen,&basename)))
 		return -ENOENT;
 	if (!namelen) {			/* special case: '/usr/' etc */
@@ -537,11 +544,8 @@ int open_namei(const char * pathname, int flag, int mode,
 		iput(dir);
 		return -EISDIR;
 	}
-    // 接着根据上面得到的最顶层目录名的i节点dir，在其中查找取得路径名字符串中最后的文件名
-    // 对应的目录项结构de，并同时得到该目录项所在的高速缓冲区指针。如果该高速缓冲指针为NULL，
-    // 则表示没有找到对应文件名的目录项，因此只可能是创建文件操作。此时如果不是创建文件，则
-    // 放回该目录的i节点，返回出错号退出。如果用户在该目录没有写的权力，则放回该目录的i节点，
-    // 返回出错号退出。
+    /* 2. 通过枝梢i节点，以及掌握的关于tty0的情况，将tty0这一目录项
+     * 载入缓冲块，de指向tty0目录块 */
 	bh = find_entry(&dir,basename,namelen,&de);
 	if (!bh) {
 		if (!(flag & O_CREAT)) {
@@ -586,6 +590,7 @@ int open_namei(const char * pathname, int flag, int mode,
     // 若上面在目录中取文件名对应目录项结构的操作成功（即bh不为NULL），则说明指定打开的文件已
     // 经存在。于是取出该目录项的i节点号和其所在设备号，并释放该高速缓冲区以及放回目录的i节点
     // 如果此时堵在操作标志O_EXCL置位，但现在文件已经存在，则返回文件已存在出错码退出。
+	/* 3. 得到'tty0'的i节点号和虚拟盘的设备号 */
 	inr = de->inode;
 	dev = dir->i_dev;
 	brelse(bh);
@@ -594,6 +599,7 @@ int open_namei(const char * pathname, int flag, int mode,
 		return -EEXIST;
     // 然后我们读取该目录项的i节点内容。若该i节点是一个目录i节点并且访问模式是只写或读写，或者
     // 没有访问的许可权限，则放回该i节点，返回访问权限出错码退出。
+	/* 4. 将'tty0'的i节点和虚拟盘设备号放入inode_table[32] */
 	if (!(inode=iget(dev,inr)))
 		return -EACCES;
 	if ((S_ISDIR(inode->i_mode) && (flag & O_ACCMODE)) ||
@@ -606,6 +612,7 @@ int open_namei(const char * pathname, int flag, int mode,
 	inode->i_atime = CURRENT_TIME;
 	if (flag & O_TRUNC)
 		truncate(inode);
+	/* 5. 将'tty0'的i节点传递出去 */
 	*res_inode = inode;
 	return 0;
 }

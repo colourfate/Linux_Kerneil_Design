@@ -103,13 +103,17 @@ static inline void unlock_buffer(struct buffer_head * bh)
 	if (!bh->b_lock)
 		printk(DEVICE_NAME ": free buffer being unlocked\n");
 	bh->b_lock=0;
+	/* bh->b_wait在sleep_on中赋值 */
 	wake_up(&bh->b_wait);
 }
 
 static inline void end_request(int uptodate)
 {
 	DEVICE_OFF(CURRENT->dev);
+	/* blk_dev[3].current_request在ll_rw_block.c中的add_request中
+	 * 挂接，在make_request中赋值*/
 	if (CURRENT->bh) {
+		/* 将这个缓冲块设置为已更新，然后解锁缓冲块 */
 		CURRENT->bh->b_uptodate = uptodate;
 		unlock_buffer(CURRENT->bh);
 	}

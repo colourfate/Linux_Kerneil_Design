@@ -149,6 +149,7 @@ ret_from_sys_call:
 	movl %ebx,signal(%eax)          # 重新保存signal位图信息→current->signal.
 	incl %ecx                       # 将信号调整为从1开始的数(1-32)
 	pushl %ecx                      # 信号值入栈作为调用do_signal的参数之一
+# 对信号位图进行检测，进程1中没有接收到信号
 	call do_signal                  # 调用C函数信号处理程序(kernel/signal.c)
 	popl %eax                       # 弹出入栈的信号值
 3:	popl %eax                       # eax中含有上面入栈系统调用的返回值
@@ -283,6 +284,7 @@ sys_fork:
 # 放入edx寄存器中，并置do_hd为NULL，接着判断edx函数指针是否为空。如果为空，则给edx
 # 赋值指向unexpected_hd_interrupt(),用于显示出错信息。随后向8259A主芯片送EOI指令，
 # 并调用edx中指针指向的函数：read_intr(),write_intr()或unexpected_hd_interrupt().
+/* 1. 硬盘在把一个扇区的内容读出来后触发 */
 hd_interrupt:
 	pushl %eax
 	pushl %ecx
@@ -300,8 +302,8 @@ hd_interrupt:
 	outb %al,$0xA0		# EOI to interrupt controller #1
 	jmp 1f			# give port chance to breathe
 1:	jmp 1f
-# do_hd定义为一个函数指针，将被赋值read_intr()或write_intr()函数地址。放到edx
-# 寄存器后就将do_hd指针变量置为NULL。然后测试得到的函数指针，若该指针为空，则
+# 2. do_hd定义为一个函数指针，在hd.c的hd_out()函数中赋值，等于read_intr()或write_intr()。
+# 放到edx寄存器后就将do_hd指针变量置为NULL。然后测试得到的函数指针，若该指针为空，则
 # 赋予该指针指向C函数unexpected_hd_interrupt()，以处理未知硬盘中断。
 1:	xorl %edx,%edx
 	xchgl do_hd,%edx
@@ -309,6 +311,7 @@ hd_interrupt:
 	jne 1f                      # 若空，则使指针指向C函数unexpected_hd_interrup().
 	movl $unexpected_hd_interrupt,%edx
 1:	outb %al,$0x20              # 送主8259A中断控制器EOI命令(结束硬件中断)
+# 3. 调用do_hd
 	call *%edx		# "interesting" way of handling intr.
 	pop %fs                     # 上句调用do_hd指向C函数
 	pop %es

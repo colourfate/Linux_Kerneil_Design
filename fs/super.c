@@ -157,69 +157,63 @@ static struct super_block * read_super(int dev)
 	if (!dev)
 		return NULL;
 	check_disk_change(dev);
-    // 如果该设备的超级块已经在超级块表中，则直接返回该超级块的指针。否则，首先在超级块
-    // 数组中找出一个空项（也即字段s_dev=0的项）。如果数组已经占满则返回空指针。
+    /* 1. 首先检查这个超级块是否已经被读取进入了super_block中，如果
+     * 已经读取，直接返回 */
 	if ((s = get_super(dev)))
 		return s;
+	/* 2. 从super_block[8]中找到没有使用的一项，并初始化和加锁
+	 * 这里找到的是第0项*/
 	for (s = 0+super_block ;; s++) {
 		if (s >= NR_SUPER+super_block)
 			return NULL;
 		if (!s->s_dev)
 			break;
 	}
-    // 在超级块数组中找到空项之后，就将该超级块项用于指定设备dev上的文件系统。于是对该
-    // 超级块结构中的内存字段进行部分初始化处理。
 	s->s_dev = dev;
 	s->s_isup = NULL;
 	s->s_imount = NULL;
 	s->s_time = 0;
 	s->s_rd_only = 0;
 	s->s_dirt = 0;
-    // 然后锁定该超级块，并从设备上读取超级块信息到bh指向的缓冲块中。超级块位于设备的第
-    // 2个逻辑块（1号块）中，（第1个是引导盘块）。如果读超级块操作失败，则释放上面选定
-    // 的超级块数组中的项（即置s_dev=0），并解锁该项，返回空指针退出。否则就将设备上读取
-    // 的超级块信息从缓冲块数据区复制到超级块数组相应项结构中。并释放存放读取信息的高速
-    // 缓冲块。
 	lock_super(s);
+	/* 3. 从根设备中读取超级块到缓冲区中 */
 	if (!(bh = bread(dev,1))) {
 		s->s_dev=0;
 		free_super(s);
 		return NULL;
 	}
+	/* 4. 从缓冲区拷贝超级块到super_block[0]中 */
 	*((struct d_super_block *) s) =
 		*((struct d_super_block *) bh->b_data);
 	brelse(bh);
-    // 现在我们从设备dev上得到了文件系统的超级块，于是开始检查这个超级块的有效性并从设备
-    // 上读取i节点位图和逻辑块位图等信息。如果所读取的超级块的文件系统魔数字段不对，说明
-    // 设备上不是正确的文件系统，因此同上面一样，释放上面选定的超级块数组中的项，并解锁该
-    // 项，返回空指针退出。对于该版Linux内核，只支持MINIX文件系统1.0版本，其魔数是0x1371。
+	// 对于该版Linux内核，只支持MINIX文件系统1.0版本，其魔数是0x1371。
 	if (s->s_magic != SUPER_MAGIC) {
 		s->s_dev = 0;
 		free_super(s);
 		return NULL;
 	}
-    // 下面开始读取设备上i节点的位图和逻辑块位图数据。首先初始化内存超级块结构中位图空间。
-    // 然后从设备上读取i节点位图和逻辑块位图信息，并存放在超级块对应字段中。i节点位图保存
-    // 在设备上2号块开始的逻辑块中，共占用s_imap_blocks个块，逻辑块位图在i节点位图所在块
-    // 的后续块中，共占用s_zmap_blocks个块。
+    /* 5. 初始化s_imap[8]、s_zmap[8] */
 	for (i=0;i<I_MAP_SLOTS;i++)
 		s->s_imap[i] = NULL;
 	for (i=0;i<Z_MAP_SLOTS;i++)
 		s->s_zmap[i] = NULL;
+	// 虚拟盘的第一块是超级块，第二块开始是第i节点位图和逻辑块位图
 	block=2;
+	/* 6. 将虚拟盘上i节点位图所占用的所有逻辑块读到缓冲区，并挂接到
+	 * s_imap[8]上 */
 	for (i=0 ; i < s->s_imap_blocks ; i++)
 		if ((s->s_imap[i]=bread(dev,block)))
 			block++;
 		else
 			break;
+	/* 7. 将虚拟盘上逻辑块位图所占用的所有逻辑块读到缓冲区，并挂接到
+	 * s_zmap[8]上 */	
 	for (i=0 ; i < s->s_zmap_blocks ; i++)
 		if ((s->s_zmap[i]=bread(dev,block)))
 			block++;
 		else
 			break;
-    // 如果读出的位图块数不等于位图应该占有的逻辑块数，说明文件系统位图信息有问题，超级块
-    // 初始化是吧。因此只能释放前面申请并占用的所有资源，即释放i节点位图和逻辑块位图占用
-    // 的高速缓冲块、释放上面选定的超级块数组项、解锁该超级块项，并返回空指针退出。
+    // 如果读出的总数不对，则返回
 	if (block != 2+s->s_imap_blocks+s->s_zmap_blocks) {
 		for(i=0;i<I_MAP_SLOTS;i++)
 			brelse(s->s_imap[i]);
@@ -233,6 +227,7 @@ static struct super_block * read_super(int dev)
     // 则查找函数会返回0值。因此0号i节点是不能用的，所以这里将位图中第1块的最低bit位设置为1，
     // 以防止文件系统分配0号i节点。同样的道理，也将逻辑块位图的最低位设置为1.最后函数解锁该
     // 超级块，并放回超级块指针。
+    /* 8. 牺牲一个i节点，以防止查找算法返回0 */
 	s->s_imap[0]->b_data[0] |= 1;
 	s->s_zmap[0]->b_data[0] |= 1;
 	free_super(s);
@@ -367,39 +362,40 @@ void mount_root(void)
     // 若磁盘i节点结构不是32字节，则出错停机。该判断用于防止修改代码时出现不一致情况。
 	if (32 != sizeof (struct d_inode))
 		panic("bad i-node size");
-    // 首先初始化文件表数组（共64项，即系统同时只能打开64个文件）和超级块表。这里将所有文件
-    // 结构中的引用计数设置为0（表示空闲），并发超级块表中各项结构的设备字段初始化为0（也
-    // 表示空闲）。如果根文件系统所在设备是软盘的话，就提示“插入根文件系统盘，并按回车键”，
-    // 并等待按键。
+    /* 1. 初始化file_table[64] */
 	for(i=0;i<NR_FILE;i++)
 		file_table[i].f_count=0;                        // 初始化文件表
+	// 如果是软盘，进入这里，我们是虚拟盘，跳过
 	if (MAJOR(ROOT_DEV) == 2) {
 		printk("Insert root floppy and press ENTER");   // 提示插入根文件系统盘
 		wait_for_keypress();
 	}
+	/* 2. 初始化super_block[8] */
 	for(p = &super_block[0] ; p < &super_block[NR_SUPER] ; p++) {
 		p->s_dev = 0;
 		p->s_lock = 0;
 		p->s_wait = NULL;
 	}
-    // 做好以上“份外”的初始化工作之后，我们开始安装根文件系统。于是从根设备上读取文件系统
-    // 超级块，并取得文件系统的根i节点（1号节点）在内存i节点表中的指针。如果读根设备上超级
-    // 块是吧或取根节点失败，则都显示信息并停机。
+    /* 3. 由于前面已经"格式化"好虚拟盘，并设置为根设备，这里从虚拟盘中
+     * 读取根设备的超级块，也就是原来软盘中的超级块*/
 	if (!(p=read_super(ROOT_DEV)))
 		panic("Unable to mount root");
+	/* 4. 申请根设备的i节点。
+	 * 从inode_table[32]申请一个空闲i节点，然后初始化，并将该inode
+	 * 所在设备的逻辑块读取放入inode中，最后得到该指针*/
 	if (!(mi=iget(ROOT_DEV,ROOT_INO)))
 		panic("Unable to read root i-node");
-    // 现在我们对超级块和根i节点进行设置。把根i节点引用次数递增3次。因此后面也引用了该i节点。
-    // 另外，iget()函数中i节点引用计数已被设置为1。然后置该超级块的被安装文件系统i节点和被
-    // 安装到i节点。再设置当前进程的当前工作目录和根目录i节点。此时当前进程是1号进程（init进程）。
 	mi->i_count += 3 ;	/* NOTE! it is logically used 4 times, not 1 */
+	/* 5. 将i节点挂载在超级块上 */
 	p->s_isup = p->s_imount = mi;
+	/* 6. 当前进程在跟文件系统的根i节点，根目录在根i节点 */
 	current->pwd = mi;
 	current->root = mi;
     // 然后我们对根文件系统的资源作统计工作。统计该设备上空闲块数和空闲i节点数。首先令i等于
     // 超级块中表明的设备逻辑块总数。然后根据逻辑块相应bit位的占用情况统计出空闲块数。这里
     // 宏函数set_bit()只是在测试bit位，而非设置bit位。“i&8191”用于取得i节点号在当前位图块中对应
     // 的bit位偏移值。"i>>13"是将i除以8192，也即除一个磁盘块包含的bit位数。
+	/* 7. 统计虚拟盘中空闲逻辑块的总数和i节点总数 */
 	free=0;
 	i=p->s_nzones;
 	while (-- i >= 0)

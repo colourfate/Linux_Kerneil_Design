@@ -215,6 +215,7 @@ int sys_open(const char * filename,int flag,int mode)
     // 为了为打开文件建立一个文件句柄，需要搜索进程结构中文件结构指针数组，以查
     // 找一个空闲项。空闲项的索引号fd即是文件句柄值。若已经没有空闲项，则返回出错码。
 	mode &= 0777 & ~current->umask;
+	/* 1. 在进程1的filp[20]中找到一个空闲项 */
 	for(fd=0 ; fd<NR_OPEN ; fd++)
 		if (!current->filp[fd])
 			break;
@@ -232,6 +233,7 @@ int sys_open(const char * filename,int flag,int mode)
     // 然后为打开文件在文件表中寻找一个空闲结构项。我们令f指向文件表数组开始处。
     // 搜索空闲文件结构项(引用计数为0的项)，若已经没有空闲文件表结构项，则返回
     // 出错码。
+    /* 2. 在file_table[64]中找到一个空闲项 */
 	f=0+file_table;
 	for (i=0 ; i<NR_FILE ; i++,f++)
 		if (!f->f_count) break;
@@ -241,7 +243,9 @@ int sys_open(const char * filename,int flag,int mode)
     // 引用计数递增1。然后调用函数open_namei()执行打开操作，若返回值小于0，则说
     // 明出错，于是释放刚申请到的文件结构，返回出错码i。若文件打开操作成功，则
     // inode是已打开文件的i节点指针。
+    /* 3. 将进程1的filp[20]与file_table[64]挂接，并增加引用计数 */
 	(current->filp[fd]=f)->f_count++;
+	/* 4. 获取标准输入设备文件的i节点 */
 	if ((i=open_namei(filename,flag,mode,&inode))<0) {
 		current->filp[fd]=NULL;
 		f->f_count=0;
@@ -255,9 +259,12 @@ int sys_open(const char * filename,int flag,int mode)
     // 组（会话期）分配控制终端。对于主设备号是5的字符文件(/dev/tty)，若当前进
     // 程没有tty，则说明出错，于是放回i节点和申请到的文件结构，返回出错码(无许可)。
 /* ttys are somewhat special (ttyxx major==4, tty major==5) */
+	/* 5. 通过检测i_mode得知是字符设备文件 */
 	if (S_ISCHR(inode->i_mode)) {
+		/* 6. 主设备号是4，为tty设备文件 */
 		if (MAJOR(inode->i_zone[0])==4) {
 			if (current->leader && current->tty<0) {
+				/* 7. 设置当前进程的tty号为该节点的次设备号 */
 				current->tty = MINOR(inode->i_zone[0]);
 				tty_table[current->tty].pgrp = current->pgrp;
 			}
@@ -277,6 +284,7 @@ int sys_open(const char * filename,int flag,int mode)
     // 现在我们初始化打开文件的文件结构。设置文件结构属性和标志，置句柄引用计数
     // 为1，并设置i节点字段为打开文件的i节点，初始化文件读写指针为0.最后返回文
     // 件句柄号。
+    /* 8. 设置file_table[0]，进程1能通过filp找到该表项 */
 	f->f_mode = inode->i_mode;
 	f->f_flags = flag;
 	f->f_count = 1;

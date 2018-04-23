@@ -185,7 +185,7 @@ __asm__("cmpl %%ecx,current\n\t" \			// 要切换的进程就是当前进程
 	"movw %%dx,%1\n\t" \					// 段选择符低位=dx=段选择符
 	"xchgl %%ecx,current\n\t" \				// 替换当前进程
 	"ljmp *%0\n\t" \						// 找到进程1的TSS，进程切换
-	"cmpl %%ecx,last_task_used_math\n\t" \
+	"cmpl %%ecx,last_task_used_math\n\t" \	// 退出进程1，返回进程0
 	"jne 1f\n\t" \
 	"clts\n" \
 	"1:" \

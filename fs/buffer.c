@@ -408,6 +408,7 @@ struct buffer_head * bread(int dev,int block)
 	ll_rw_block(READ,bh);
 	/* 3. 挂起等待硬盘读取完毕 */
 	wait_on_buffer(bh);
+	/* 4. 读取完毕后，bh->b_uptodate=1，返回bh */
 	if (bh->b_uptodate)
 		return bh;
 	brelse(bh);

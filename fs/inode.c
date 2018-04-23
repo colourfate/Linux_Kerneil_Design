@@ -366,36 +366,29 @@ struct m_inode * iget(int dev,int nr)
 {
 	struct m_inode * inode, * empty;
 
-    // 首先判断参数的有效性。若设备号是0，则表明内核代码有问题，显示出错信息并停机。
-    // 然后预先从i节点表中取一个空闲i节点备用。
 	if (!dev)
 		panic("iget with dev==0");
+	/* 1. 从inode_table[32]中申请一个空闲的i节点 */
 	empty = get_empty_inode();
-    // 接着扫描i节点表。寻找参数指定节点号nr的i节点。并递增该节点的引用次数。如果当
-    // 前扫描i节点的设备号不等于指定的设备号或者节点号不等于指定的节点号，则继续扫描。
 	inode = inode_table;
+	/* 2. 查找参数相同的inode，这里不会找到 */
 	while (inode < NR_INODE+inode_table) {
 		if (inode->i_dev != dev || inode->i_num != nr) {
 			inode++;
 			continue;
 		}
-        // 如果找到指定设备号dev和节点号nr的i节点，则等待该节点解锁。在等待该节点解
-        // 锁过程中，i节点表可能会发生变化。所以再次进行上述相同判断。如果发生了变化，
-        // 则再次重新扫描整个i节点表。
+		// 找到后等待解锁
 		wait_on_inode(inode);
+		// 如等待期间发生变化，则重新扫描
 		if (inode->i_dev != dev || inode->i_num != nr) {
 			inode = inode_table;
 			continue;
 		}
-        // 到这里表示找到相应的i节点。于是将该i节点引用计数增1.然后再做进一步检查，看它
-        // 是否是另一个文件系统的安装点。若是则寻找被安装文件系统根节点并返回。如果
-        // 该i节点的确是其他文件系统的安装点，则在超级块表中搜寻安装在此i节点的超级块。
-        // 如果没有找到，则显示出错信息，并放回本函数开始时获取的空闲节点empty，
-        // 返回该i节点指针。
+        // 引用计数加一
 		inode->i_count++;
 		if (inode->i_mount) {
 			int i;
-
+			// 如是挂载点，查找对应的超级块
 			for (i = 0 ; i<NR_SUPER ; i++)
 				if (super_block[i].s_imount==inode)
 					break;
@@ -420,13 +413,13 @@ struct m_inode * iget(int dev,int nr)
 			iput(empty);
 		return inode;
 	}
-    // 如果我们在i节点表中没有找到指定的i节点，则利用前面申请的空闲i节点empty在i节点表中
-    // 建立该i节点。并从相应设备上读取该i节点信息，返回该i节点指针。
 	if (!empty)
 		return (NULL);
+	/* 3. 初始化inode */
 	inode=empty;
 	inode->i_dev = dev;
 	inode->i_num = nr;
+	/* 4. 从虚拟盘上读出根节点 */
 	read_inode(inode);
 	return inode;
 }
@@ -442,24 +435,25 @@ static void read_inode(struct m_inode * inode)
 	struct buffer_head * bh;
 	int block;
 
-    // 首先锁定该i节点，并取该节点所在设备的超级块。
+    /* 1. 锁定inode */
 	lock_inode(inode);
+	/* 2. 获得inode所在设备的超级块 */
 	if (!(sb=get_super(inode->i_dev)))
 		panic("trying to read inode without dev");
     // 该i节点所在的设备逻辑块号＝（启动块+超级块）+i节点位图占用的块数+逻辑块位图占用的块数
     // +（i节点号-1）/每块含有的i节点数。虽然i节点号从0开始编号，但第i个0号i节点不用，并且
     // 磁盘上也不保存对应的0号i节点结构。因此存放i节点的盘块的第i块上保存的是i节点号是1--16
-    // 的i节点结构而不是0--15的。因此在上面计算i节点号对应的i节点结构所在盘块时需要减1，即：
-    // B=（i节点号-1)/每块含有i节点结构数。例如，节点号16的i节点结构应该在B=（16-1）/16 = 0的
-    // 块上。这里我们从设备上读取该i节点所在的逻辑块，并复制指定i节点内容到inode指针所指位置处。
+    // 的i节点结构而不是0--15的。因此在上面计算i节点号对应的i节点结构所在盘块时需要减1，
 	block = 2 + sb->s_imap_blocks + sb->s_zmap_blocks +
 		(inode->i_num-1)/INODES_PER_BLOCK;
+	/* 3. 将inode所在逻辑块读入缓冲区，并复制到目标inode中
+	 * 因为是d_inode，因此只复制了前面前面一部分？*/
 	if (!(bh=bread(inode->i_dev,block)))
 		panic("unable to read i-node block");
 	*(struct d_inode *)inode =
 		((struct d_inode *)bh->b_data)
 			[(inode->i_num-1)%INODES_PER_BLOCK];
-    // 最后释放读入的缓冲块，并解锁该i节点。
+    /* 4. 最后释放读入的缓冲块，并解锁该i节点。 */
 	brelse(bh);
 	unlock_inode(inode);
 }

@@ -137,27 +137,32 @@ int sys_setup(void * BIOS)
 	}
 	// 第一个物理盘设备号是0x300，第二个是0x305，读每个硬盘的0号块，即引导块，有分区信息
 	for (drive=0 ; drive<NR_HD ; drive++) {
-		/* 2.  */
+		/* 2. 从该扇区开始读取，读取中会进程切换，发生中断 */
 		if (!(bh = bread(0x300 + drive*5,0))) {
 			printk("Unable to read partition table of drive %d\n\r",
 				drive);
 			panic("");
 		}
+		/* 3. 判断硬盘信息有效标志 */
 		if (bh->b_data[510] != 0x55 || (unsigned char)
 		    bh->b_data[511] != 0xAA) {
 			printk("Bad partition table on drive %d\n\r",drive);
 			panic("");
 		}
+		/* 4. 根据硬盘中的分区信息设置虚拟盘，hd[1]~hd[4] */
 		p = 0x1BE + (void *)bh->b_data;
 		for (i=1;i<5;i++,p++) {
 			hd[i+5*drive].start_sect = p->start_sect;
 			hd[i+5*drive].nr_sects = p->nr_sects;
 		}
+		/* 5. 释放缓冲块 */
 		brelse(bh);
 	}
 	if (NR_HD)
 		printk("Partition table%s ok.\n\r",(NR_HD>1)?"s":"");
+	/* 6. 用软盘256以后扇区格式化虚拟盘，使之成为一个块设备 */
 	rd_load();
+	/* 7. 加载根文件系统 */
 	mount_root();
 	return (0);
 }
@@ -259,14 +264,20 @@ static void read_intr(void)
 		do_hd_request();
 		return;
 	}
+	/* 1. 读取到的数据存到blk_dev[3].current_request.buffer，
+	 * 在ll_rw_block.c中这个值指向bh->b_data，而bh->b_data
+	 * 在初始化的时候指向内存缓冲区的缓冲块，在buffer.c的
+	 * buffer_init()函数当中 */
 	port_read(HD_DATA,CURRENT->buffer,256);
 	CURRENT->errors = 0;
 	CURRENT->buffer += 512;
 	CURRENT->sector++;
+	/* 2. 第一次读取没有读完从这里返回 */
 	if (--CURRENT->nr_sectors) {
 		do_hd = &read_intr;
 		return;
 	}
+	/* 3. 下一次进入读取完成，从这里返回 */
 	end_request(1);
 	do_hd_request();
 }
