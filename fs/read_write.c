@@ -85,6 +85,7 @@ int sys_read(unsigned int fd,char * buf,int count)
     // 函数首先对参数有效性进行判断。如果文件句柄值大于程序最多打开文件数NR_OPEN，
     // 或者需要读取的字节计数值小于0，或者该句柄的文件结构指针为空，则返回出错码并
     // 退出。若需读取的字节数count等于0，则返回0退出。
+    /* a. 找到对应的文件指针 */
 	if (fd>=NR_OPEN || count<0 || !(file=current->filp[fd]))
 		return -EINVAL;
 	if (!count)
@@ -95,6 +96,7 @@ int sys_read(unsigned int fd,char * buf,int count)
     // 字符设备操作，并返回读取的字符数。如果是块设备文件，则执行块设备读操作，并
     // 返回读取的字节数。
 	verify_area(buf,count);
+	/* b. 取出文件对应inode */
 	inode = file->f_inode;
 	if (inode->i_pipe)
 		return (file->f_mode&1)?read_pipe(inode,buf,count):-EIO;
@@ -108,7 +110,8 @@ int sys_read(unsigned int fd,char * buf,int count)
     // 读去字节数加上文件当前读写指针值大于文件长度，则重新设置读取字节数为文件长度
     // -当前读写指针值，若读取数等于0，则返回0退出)，然后执行文件读操作，返回读取的
     // 字节数并退出。
-    /* 1. /etc/rc是普通文件，返回-ERROR退出 */
+    /* 1. /etc/rc是普通文件，返回-ERROR退出 
+	 * c. 根据inode和file读取文件内容到buf中*/
 	if (S_ISDIR(inode->i_mode) || S_ISREG(inode->i_mode)) {
 		if (count+file->f_pos > inode->i_size)
 			count = inode->i_size - file->f_pos;

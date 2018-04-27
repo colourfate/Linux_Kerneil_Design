@@ -127,6 +127,7 @@ static int match(int len,const char * name,struct dir_entry * de)
 // 作用，请参见seched.c中的注释。
 // 返回：成功则函数高速缓冲区指针，并在*res_dir处返回的目录项结构指针。失败则
 // 返回空指针NULL。
+/* 示例：find_entry(&inode,"mnt",3,&de), inode为根目录i节点*/
 static struct buffer_head * find_entry(struct m_inode ** dir,
 	const char * name, int namelen, struct dir_entry ** res_dir)
 {
@@ -149,6 +150,8 @@ static struct buffer_head * find_entry(struct m_inode ** dir,
     // 首先计算本目录中目录项项数entries。目录i节点i_size字段中含有本目录包含的数据
     // 长度，因此其除以一个目录项的长度（16字节）即课得到该目录中目录项数。然后置空
     // 返回目录项结构指针。如果长度等于0，则返回NULL，退出。
+    /* 1. 计算目录文件中有多少个目录项，i_size是目录文件 的大小，目录中的一个文件
+     * 占用一个dir_entry，文件越多，目录文件越大 */
 	entries = (*dir)->i_size / (sizeof (struct dir_entry));
 	*res_dir = NULL;
 	if (!namelen)
@@ -162,6 +165,7 @@ static struct buffer_head * find_entry(struct m_inode ** dir,
     // 的i节点进行处理。于是我们让*dir指向该被安装到的i节点；并且该i节点的引用数加1.
     // 即针对这种情况，我们悄悄的进行了“偷梁换柱”工程。:-)
 /* check for '..', as we might have to do some "magic" for it */
+	/* 2. 如果目录项是'..'，在这里处理 */
 	if (namelen==2 && get_fs_byte(name)=='.' && get_fs_byte(name+1)=='.') {
 /* '..' in a pseudo-root results in a faked '.' (just change namelen) */
 		if ((*dir) == current->root)
@@ -184,13 +188,17 @@ static struct buffer_head * find_entry(struct m_inode ** dir,
     // 否则我们就从节点所在设备读取指定的目录项数据块。当然，如果不成功，则也返回NULL 退出。
 	if (!(block = (*dir)->i_zone[0]))
 		return NULL;
+	/* 3. 将根目录逻辑块读入缓冲区，这里逻辑块里面放着的就是一个个目录项，也就是dir_entry
+	 * 结构，其中包含文件名称和对应的inode号 */
 	if (!(bh = bread((*dir)->i_dev,block)))
 		return NULL;
     // 此时我们就在这个读取的目录i节点数据块中搜索匹配指定文件名的目录项。首先让de指向
     // 缓冲块中的数据块部分。并在不超过目录中目录项数的条件下，循环执行搜索。其中i是目录中
     // 的目录项索引号。在循环开始时初始化为0.
 	i = 0;
+	/* 4. de指向缓冲块首地址 */
 	de = (struct dir_entry *) bh->b_data;
+	/* 5. 在根目录中查找"mnt"，找到de就是目标目录项 */
 	while (i < entries) {
         // 如果当前目录项数据块已经搜索完，还没有找到匹配的目录项，则释放当前目录项数据块。
         // 再读入目录的下一个逻辑块。若这块为空。则只要还没有搜索完目录中的所有目录项，就
@@ -263,6 +271,7 @@ static struct buffer_head * add_entry(struct m_inode * dir,
     // 如果参数提供的文件名长度等于0，则也返回NULL退出。
 	if (!namelen)
 		return NULL;
+	/* 1. 找到目录文件在外设上的第一个块号，并读取进缓冲区 */
 	if (!(block = dir->i_zone[0]))
 		return NULL;
 	if (!(bh = bread(dir->i_dev,block)))
@@ -271,6 +280,7 @@ static struct buffer_head * add_entry(struct m_inode * dir,
     // 首先让目录项结构指针de指向缓冲块中的数据块部分，即第一个目录项处。
     // 其中i是目录中的目录项索引号，在循环开始时初始化为0.
 	i = 0;
+	/* 2. de指向第一个目录项 */
 	de = (struct dir_entry *) bh->b_data;
 	while (1) {
         // 如果当前目录项数据块已经搜索完毕，但还没有找到需要的空目录项，
@@ -283,9 +293,11 @@ static struct buffer_head * add_entry(struct m_inode * dir,
         // 的缓冲块数据部分，然后在其中继续搜索。其中i/DIR_ENTRIES_PER_BLOCK可
         // 计算得到当前搜索的目录项i所在目录文件中的块号，而create_block函数则可
         // 读取或创建出在设备上对应的逻辑块。
+        /* 3. 如果这个数据块中没有空闲目录项，则载入/创建下一个数据块 */
 		if ((char *)de >= BLOCK_SIZE+bh->b_data) {
 			brelse(bh);
 			bh = NULL;
+			/* 该函数在没有数据块时才创建 */
 			block = create_block(dir,i/DIR_ENTRIES_PER_BLOCK);
 			if (!block)
 				return NULL;
@@ -301,6 +313,7 @@ static struct buffer_head * add_entry(struct m_inode * dir,
         // 目录文件数据的末端处。于是对该处目录项进行设置（置该目录项的i节点指针
         // 为空），并更新该目录文件的长度值（加上一个目录项的长度），然后设置目录
         // 的i节点已修改标志，再更新该目录的改变时间为当前时间。
+        /* 4. 已达到inode末尾，没有找到空闲项，在inode末尾添加一个空闲项 */
 		if (i*sizeof(struct dir_entry) >= dir->i_size) {
 			de->inode=0;
 			dir->i_size = (i+1)*sizeof(struct dir_entry);
@@ -311,6 +324,8 @@ static struct buffer_head * add_entry(struct m_inode * dir,
         // 或是添加的新目录项。于是更新目录的修改时间为当前时间，并从用户数据区
         // 复制文件名到该目录项的文件名字段，置含有本目录项的相应高速缓冲块已修改
         // 标志。返回该目录项的指针以及该高速缓冲块的指针，退出。
+        /* 5. 已找到空闲项de，给de->name赋值，传递出去，此时de->inode为0，表示是一个
+         * 空闲项 */
 		if (!de->inode) {
 			dir->i_mtime = CURRENT_TIME;
 			for (i=0; i < NAME_LEN ; i++)
@@ -337,6 +352,7 @@ static struct buffer_head * add_entry(struct m_inode * dir,
 //// 搜寻指定路径的目录（或文件名）的i节点。
 // 参数：pathname - 路径名
 // 返回：目录或文件的i节点指针。
+/* 示例：get_dir("/mnt/user/user1/user2/hello.txt") */
 static struct m_inode * get_dir(const char * pathname)
 {
 	char c;
@@ -361,7 +377,8 @@ static struct m_inode * get_dir(const char * pathname)
     // 应从进程的当前工作目录开始操作。则取进程当前工作目录的i节点。如果路径
     // 名为空，则出错返回NULL退出。此时变量inode指向了正确的i节点 -- 进程的
     // 根i节点或当前工作目录i节点之一。
-    /* 2. 识别出"/dev/tty0"第一个字符是'/'，pathname指向'd' */
+    /* 2. 识别出"/dev/tty0"第一个字符是'/'，pathname指向'd' 
+	 * a. 第一个字符是'/'，inode设置为根节点，pathname指向'mnt' */
 	if ((c=get_fs_byte(pathname))=='/') {
 		inode = current->root;
 		pathname++;
@@ -375,6 +392,7 @@ static struct m_inode * get_dir(const char * pathname)
     // 当前正在处理的目录名部分（或文件名）。如果该i节点不是目录类型的i节点，
     // 或者没有可进入该目录的访问许可，则放回该i节点，并返回NULL退出。当然，刚
     // 进入循环时，当前的i节点就是进程根i节点或者是当前工作目录的i节点。
+    /* b. 增加根节点引用计数 */
 	inode->i_count++;
 	while (1) {
 		thisname = pathname;
@@ -391,7 +409,8 @@ static struct m_inode * get_dir(const char * pathname)
         // 注意！如果路径名中最后一个名称也是一个目录名，但其后面没有加上'/'字符，
         // 则函数不会返回该最后目录的i节点！例如：对于路径名/usr/src/linux，该函数
         // 将只返回src/目录名的i节点。
-        /* 3. 获取thisname的长度，第一次c指向't'，第二次c指向'\0' */
+        /* 3. 获取thisname的长度，第一次c指向't'，第二次c指向'\0'
+         * c. pathname指向'user', c='/', namelen=3 */
 		for(namelen=0;(c=get_fs_byte(pathname++))&&(c!='/');namelen++)
 			/* nothing */ ;
 		/* 7. 第二次从这里退出 */
@@ -402,17 +421,21 @@ static struct m_inode * get_dir(const char * pathname)
         // NULL退出。然后在找到的目录项中取出其i节点号inr和设备号idev，释放包含该目录
         // 项的高速缓冲块并放回该i节点。然后去节点号inr的i节点inode，并以该目录项为
         // 当前目录继续循环处理路径名中的下一目录名部分（或文件名）。
-        /* 4. 通过目录文件的i节点和目录项信息，获取目录项 */
+        /* 4. 通过目录文件的i节点和目录项信息，获取目录项 
+		 * d. inode为根节点，thisname指向'mnt'，namelen=3，这一步目的就是由"mnt"名得到
+		 * 它的inode号 */
 		if (!(bh = find_entry(&inode,thisname,namelen,&de))) {
 			iput(inode);
 			return NULL;
 		}
-		/* 5. 通过目录项找到i节点号和设备号 */
+		/* 5. 通过目录项找到i节点号和设备号 
+		 * e. inr为'mnt'节点的inode号，idev为根节点的设备号 */
 		inr = de->inode;                        // 当前目录名部分的i节点号
 		idev = inode->i_dev;
 		brelse(bh);
 		iput(inode);
-		/* 6. 将i节点号和设备号保存在table_inode[32]指定的表项内 */
+		/* 6. 将i节点号和设备号保存在table_inode[32]指定的表项内 
+		 * f. 获取'mnt'节点的i节点 */
 		if (!(inode = iget(idev,inr)))          // 取i节点内容。
 			return NULL;
 	}
@@ -427,6 +450,7 @@ static struct m_inode * get_dir(const char * pathname)
 // 参数：pathname - 目录路径名；namelen - 路径名长度；name - 返回的最顶层目录名。
 // 返回：指定目录名最顶层目录的i节点指针和最顶层目录名称及长度。出错时返回NULL。
 // 注意！！这里"最顶层目录"是指路径名中最靠近末端的目录。
+/* 示例：dir_namei("/mnt/user/user1/user2/hello.txt",&namelen,&basename) */
 static struct m_inode * dir_namei(const char * pathname,
 	int * namelen, const char ** name)
 {
@@ -438,11 +462,13 @@ static struct m_inode * dir_namei(const char * pathname,
     // 最后一个'/'字符后面的名字字符串，计算其长度，并且返回最顶层目录的i节点指针。
     // 注意！如果路径名最后一个字符是斜杠字符'/'，那么返回的目录名为空，并且长度为0.
     // 但返回的i节点指针仍然指向最后一个'/'字符钱目录名的i节点。
-	/* 1. 获取枝梢节点，即'dev'所在的inode */
+	/* 1. 获取枝梢节点，即'dev'所在的inode 
+	 * a. 获取'user2'所在i节点 */
 	if (!(dir = get_dir(pathname)))
 		return NULL;
 	basename = pathname;
-	/* 2. 逐个遍历"/dev/tty0"字符串，basename指向第二个'/' */
+	/* 2. 逐个遍历"/dev/tty0"字符串，basename指向"tty0" 
+	 * b. basename指向"hello.txt"，*namelen=9 */
 	while ((c=get_fs_byte(pathname++)))
 		if (c=='/')
 			basename=pathname;
@@ -473,6 +499,7 @@ struct m_inode * namei(const char * pathname)
     // 首先查找指定路径的最顶层目录的目录名并得到其i节点，若不存在，则返回NULL退出。
     // 如果返回的最顶层名字长度是0，则表示该路径名以一个目录名为最后一项。因此我们
     // 已经找到对应目录的i节点，可以直接返回该i节点退出。
+    /* 1. 获取枝梢节点，并得到文件名和长度 */
 	if (!(dir = dir_namei(pathname,&namelen,&basename)))
 		return NULL;
 	if (!namelen)			/* special case: '/usr/' etc */
@@ -482,6 +509,7 @@ struct m_inode * namei(const char * pathname)
     // src/目录名的i节点。因为函数dir_namei()把不以'/'结束的最后一个名字当作一个文件名
     // 来看待，所以这里需要单独对这种情况使用寻找目录项i节点函数find_entry()进行处理。
     // 此时de中含有寻找到的目录项指针，而dir是包含该目录项的目录的i节点指针。
+    /* 2. 根据文件名和长度，从枝梢节点中取出对应目录项 */
 	bh = find_entry(&dir,basename,namelen,&de);
 	if (!bh) {
 		iput(dir);
@@ -490,6 +518,7 @@ struct m_inode * namei(const char * pathname)
     // 接着取该目录项的i节点号和设备号，并释放包含该目录项的高速缓冲块并返回目录i节点。
     // 然后取对应节点号的i节点，修改其被访问时间为当前时间，并置已修改标志。最后返回
     // 该i节点指针。
+    /* 3. 获得文件的i节点号，从而得到inode */
 	inr = de->inode;
 	dev = dir->i_dev;
 	brelse(bh);
@@ -515,6 +544,7 @@ struct m_inode * namei(const char * pathname)
 // 权限)、S_IRWXG(组成员具有读、写和执行权限)等等。对于新创建的文件，这些属性只应用于
 // 将来对文件的访问，创建了只读文件的打开调用也将返回一个可读写的文件句柄。
 // 返回：成功返回0，否则返回出错码；res_inode - 返回对应文件路径名的i节点指针。
+/* 示例：open("/mnt/user/user1/user2/hello.txt", O_RDWR, 0644, &inode) */
 int open_namei(const char * pathname, int flag, int mode,
 	struct m_inode ** res_inode)
 {
@@ -529,11 +559,13 @@ int open_namei(const char * pathname, int flag, int mode,
     // O_TRUNC必须在文件可写情况下才有效。然后使用当前进程的文件访问许可屏蔽码，屏蔽掉
     // 给定模式中的相应位，并添上对普通文件标志I_REGULAR。该标志将用于打开的文件不存在
     // 而需要创建文件时，作为新文件的默认属性。
+    /* 如果文件为只读，且长度为0，则设置为只写 */
 	if ((flag & O_TRUNC) && !(flag & O_ACCMODE))
 		flag |= O_WRONLY;
 	mode &= 0777 & ~current->umask;
 	mode |= I_REGULAR;
-    /* 1. 获取枝梢i节点，即'dev'所在inode，namelen=3，basename指向'tty0' */
+    /* 1. 获取枝梢i节点，即'dev'所在inode，namelen=3，basename指向'tty0' 
+	 * a. 获取user2的i节点，namelen=9，basename指向'hello.txt'*/
 	if (!(dir = dir_namei(pathname,&namelen,&basename)))
 		return -ENOENT;
 	if (!namelen) {			/* special case: '/usr/' etc */
@@ -545,7 +577,11 @@ int open_namei(const char * pathname, int flag, int mode,
 		return -EISDIR;
 	}
     /* 2. 通过枝梢i节点，以及掌握的关于tty0的情况，将tty0这一目录项
-     * 载入缓冲块，de指向tty0目录块 */
+     * 载入缓冲块，de指向tty0目录块 
+     * b. 通过文件所在目录的i节点dir，将dir所在看块读进缓冲区bh，dir节点为目录文件，因此读进bh中
+     * 的为一个个目录项，从这些目录项中找到名为basename，长度为namelen的目录项，存到de中
+     * dir为"user2"的i节点，basename="hello.txt", namelen=9
+     * 返回de为user2文件中basename对应的目录项，若是创建文件则返回NULL */
 	bh = find_entry(&dir,basename,namelen,&de);
 	if (!bh) {
 		if (!(flag & O_CREAT)) {
@@ -560,6 +596,7 @@ int open_namei(const char * pathname, int flag, int mode,
         // 新的i节点给路径名上指定的文件使用。若失败则放回目录的i节点，并返回没有空间出错码。
         // 否则使用该新i节点，对其进行初始设置：置节点的用户id；对应节点访问模式；置已修改
         // 标志。然后并在指定目录dir中添加一个新目录项。
+        /* b.1 在inode_table中申请一个新的inode并更新节点位图信息到外设。 */
 		inode = new_inode(dir->i_dev);
 		if (!inode) {
 			iput(dir);
@@ -568,6 +605,7 @@ int open_namei(const char * pathname, int flag, int mode,
 		inode->i_uid = current->euid;
 		inode->i_mode = mode;
 		inode->i_dirt = 1;
+		/* b.2 在dir中新建一个目录项，返回到de中，de->name=basename */
 		bh = add_entry(dir,basename,namelen,&de);
         // 如果返回的应该含有新目录项的高速缓冲区指针为NULL，则表示添加目录项操作失败。于是
         // 将该新i节点的引用计数减1，放回该i节点与目录的i节点并返回出错码退出。否则说明添加
@@ -580,6 +618,7 @@ int open_namei(const char * pathname, int flag, int mode,
 			iput(dir);
 			return -ENOSPC;
 		}
+		/* b.3 给de->inode赋值，建立对应关系 */
 		de->inode = inode->i_num;
 		bh->b_dirt = 1;
 		brelse(bh);
@@ -590,7 +629,8 @@ int open_namei(const char * pathname, int flag, int mode,
     // 若上面在目录中取文件名对应目录项结构的操作成功（即bh不为NULL），则说明指定打开的文件已
     // 经存在。于是取出该目录项的i节点号和其所在设备号，并释放该高速缓冲区以及放回目录的i节点
     // 如果此时堵在操作标志O_EXCL置位，但现在文件已经存在，则返回文件已存在出错码退出。
-	/* 3. 得到'tty0'的i节点号和虚拟盘的设备号 */
+	/* 3. 得到'tty0'的i节点号和虚拟盘的设备号 
+	 * c. inr为"hello.txt"文件对应的inode号，dev为hd1的设备号 */
 	inr = de->inode;
 	dev = dir->i_dev;
 	brelse(bh);
@@ -599,7 +639,8 @@ int open_namei(const char * pathname, int flag, int mode,
 		return -EEXIST;
     // 然后我们读取该目录项的i节点内容。若该i节点是一个目录i节点并且访问模式是只写或读写，或者
     // 没有访问的许可权限，则放回该i节点，返回访问权限出错码退出。
-	/* 4. 将'tty0'的i节点和虚拟盘设备号放入inode_table[32] */
+	/* 4. 将'tty0'的i节点和虚拟盘设备号放入inode_table[32] 
+	 * d. 获取"hello.txt"的i节点 */
 	if (!(inode=iget(dev,inr)))
 		return -EACCES;
 	if ((S_ISDIR(inode->i_mode) && (flag & O_ACCMODE)) ||
@@ -996,6 +1037,7 @@ int sys_unlink(const char * name)
     // 没有指定文件名，放回该目录i节点，返回出错码退出。如果在该目录中没有写权限，则
     // 放回该目录的i节点，返回访问许可出错码退出。如果找不到对应路径名顶层目录的i节点，
     // 则返回出错码。
+    /* 1. 找到要删除文件的枝梢目录节点 */
 	if (!(dir = dir_namei(name,&namelen,&basename)))
 		return -ENOENT;
 	if (!namelen) {
@@ -1012,11 +1054,13 @@ int sys_unlink(const char * name)
     // 应路径名上最后目录名的目录项不存在，则释放包含该目录项的高速缓冲区，放回目录的
     // i节点，返回文件已经存在出错码，并退出。如果取自目录项的i节点出错，则放回目录的
     // i节点，并释放含有目录项的高速缓冲区，返回出错号。
+    /* 2. 通过枝梢节点获得文件的目录项de */
 	bh = find_entry(&dir,basename,namelen,&de);
 	if (!bh) {
 		iput(dir);
 		return -ENOENT;
 	}
+	/* 3. 通过de->inode获得文件i节点 */
 	if (!(inode = iget(dir->i_dev, de->inode))) {
 		iput(dir);
 		brelse(bh);
@@ -1052,6 +1096,7 @@ int sys_unlink(const char * name)
 	}
     // 现在我们可以删除文件名对应的目录项了，于是将该文件名目录项中的i节点号字段置为0，
     // 表示释放该目录项，并设置包含该目录项的缓冲块已修改标志，释放该高速缓冲块。
+    /* 4. 删除文件 */
 	de->inode = 0;
 	bh->b_dirt = 1;
 	brelse(bh);

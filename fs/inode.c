@@ -85,6 +85,7 @@ void sync_inodes(void)
     // 是否已被修改并且不是管道节点。若是这种情况则将该i节点写入高速缓冲区中。
     // 缓冲区管理程序buffer.c会在适当时机将他们写入盘中。
 	inode = 0+inode_table;
+	/* 遍历所有节点，如果节点内容已经改动，同步到缓冲区 */
 	for(i=0 ; i<NR_INODE ; i++,inode++) {
 		wait_on_inode(inode);
 		if (inode->i_dirt && !inode->i_pipe)
@@ -112,6 +113,7 @@ static int _bmap(struct m_inode * inode,int block,int create)
     // 则使用直接块表示。如果创建标志置位，并且i节点中对应块的逻辑块(区段)字段为0，
     // 则相应设备申请一磁盘块（逻辑块），并且将磁盘上逻辑块号（盘块号）填入逻辑块
     // 字段中。然后设置i节点改变时间，置i节点已修改标志。然后返回逻辑块号。
+    /* 1. 要读的i_zone号小于7，直接返回i_zone[block] */
 	if (block<7) {
 		if (create && !inode->i_zone[block])
 			if ((inode->i_zone[block]=new_block(inode->i_dev))) {
@@ -127,7 +129,9 @@ static int _bmap(struct m_inode * inode,int block,int create)
     // i_zone[7] = 0,则返回0.或者不创建，但i_zone[7]原来就为0，表明i节点中没有间接块，
     // 于是映射磁盘是吧，则返回0退出。
 	block -= 7;
+	/* 2. 要读的i_zone号大于7，小于512+7 */
 	if (block<512) {
+		/* a. 创建模式下，一级索引块不存在时，创建一级索引块 */
 		if (create && !inode->i_zone[7])
 			if ((inode->i_zone[7]=new_block(inode->i_dev))) {
 				inode->i_dirt=1;
@@ -139,9 +143,11 @@ static int _bmap(struct m_inode * inode,int block,int create)
         // 号）i。每一项占2个字节。如果是创建并且间接块的第block项中的逻辑块号为0的话，
         // 则申请一磁盘块，并让间接块中的第block项等于该新逻辑块块号。然后置位间接块的
         // 已修改标志。如果不是创建，则i就是需要映射（寻找）的逻辑块号。
+        /* 3. 读出一级索引块，从中索引block即是块号 */
 		if (!(bh = bread(inode->i_dev,inode->i_zone[7])))
 			return 0;
 		i = ((unsigned short *) (bh->b_data))[block];
+		/* 创建模式下，如果读取的块号是空的，则新建一个块，把块号给i */
 		if (create && !i)
 			if ((i=new_block(inode->i_dev))) {
 				((unsigned short *) (bh->b_data))[block]=i;
@@ -159,6 +165,7 @@ static int _bmap(struct m_inode * inode,int block,int create)
     // 间接块字段i_zone[8]为0，则返回0.或者不是创建，但i_zone[8]原来为0，表明i节点中没有
     // 间接块，于是映射磁盘块失败，返回0退出。
 	block -= 512;
+	/* 4. 要读的i_zone号大于7+512，小于7+512+512*512 */
 	if (create && !inode->i_zone[8])
 		if ((inode->i_zone[8]=new_block(inode->i_dev))) {
 			inode->i_dirt=1;
@@ -171,6 +178,7 @@ static int _bmap(struct m_inode * inode,int block,int create)
     // 话，则需申请一磁盘块(逻辑块)作为二次间接块的二级快i，并让二次间接块的一级块中
     // 第block/512 项等于二级块的块号i。然后置位二次间接块的一级块已修改标志。并释放
     // 二次间接块的一级块。如果不是创建，则i就是需要映射的逻辑块号。
+    /* 5. 读出一级索引块，索引block/512即是二级索引块的块号 */
 	if (!(bh=bread(inode->i_dev,inode->i_zone[8])))
 		return 0;
 	i = ((unsigned short *)bh->b_data)[block>>9];
@@ -184,6 +192,7 @@ static int _bmap(struct m_inode * inode,int block,int create)
     // 0退出。否则就从设备上读取二次间接块的二级块，并取该二级块上第block项中的逻辑块号。
 	if (!i)
 		return 0;
+	/* 6. 通过二级索引块的块号读出二级索引块，索引block%512即是要求的块号 */
 	if (!(bh=bread(inode->i_dev,i)))
 		return 0;
 	i = ((unsigned short *)bh->b_data)[block&511];
@@ -264,6 +273,7 @@ repeat:
 		return;
 	}
 	if (!inode->i_nlinks) {
+		/* 根据inode->i_zone[9]，释放文件占用的逻辑块，然后清空inode，同步节点位图 */
 		truncate(inode);
 		free_inode(inode);
 		return;
@@ -271,6 +281,7 @@ repeat:
     // 如果该i节点已做过修改，则回写更新该i节点，并等待该i节点解锁。由于这里在写i节点
     // 时需要等待睡眠，此时其他进程有可能修改i节点，因此在进程被唤醒后需要再次重复进行
     // 上述判断过程(repeat)。
+    /* 如果i节点被改过，从外设读取i节点到缓冲区，然后将该节点写入到缓冲区 */
 	if (inode->i_dirt) {
 		write_inode(inode);	/* we can sleep - so do again */
 		wait_on_inode(inode);
@@ -362,6 +373,7 @@ struct m_inode * get_pipe_inode(void)
 // 首先在位于高速缓冲区中的i节点表中搜寻，若找到指定节点号的i节点则在经过一些判断
 // 处理后返回该i节点指针。否则从设备dev上读取指定i节点号的i节点信息放入i节点表中，
 // 并返回该i节点指针。
+/* 示例：iget(idev,inr), idev为根节点设备号，inr为"mnt"目录的inode号 */
 struct m_inode * iget(int dev,int nr)
 {
 	struct m_inode * inode, * empty;
@@ -371,7 +383,8 @@ struct m_inode * iget(int dev,int nr)
 	/* 1. 从inode_table[32]中申请一个空闲的i节点 */
 	empty = get_empty_inode();
 	inode = inode_table;
-	/* 2. 查找参数相同的inode，这里不会找到 */
+	/* 2. 查找参数相同的inode，这里不会找到
+	 * a. 这里mnt的inode已经加载到inode_table中 */
 	while (inode < NR_INODE+inode_table) {
 		if (inode->i_dev != dev || inode->i_num != nr) {
 			inode++;
@@ -386,9 +399,10 @@ struct m_inode * iget(int dev,int nr)
 		}
         // 引用计数加一
 		inode->i_count++;
+		/* b. "mnt"中安装了文件系统 */
 		if (inode->i_mount) {
 			int i;
-			// 如是挂载点，查找对应的超级块
+			// c. 查找对应的超级块
 			for (i = 0 ; i<NR_SUPER ; i++)
 				if (super_block[i].s_imount==inode)
 					break;
@@ -402,8 +416,10 @@ struct m_inode * iget(int dev,int nr)
             // 放回，并从安装在次i节点上的文件系统超级块中取设备号，并令i节点号为ROOT_INO，
             // 即为1.然后重新扫描整个i节点表，以获取该被安装文件系统的根i节点信息。
 			iput(inode);
+			/* d. 通过对应超级得到设备号，设置外设的根i节点号 */
 			dev = super_block[i].s_dev;
 			nr = ROOT_INO;
+			/* e. 重新遍历inode_table，看hd1的根i节点是否是否已经加载 */
 			inode = inode_table;
 			continue;
 		}
@@ -413,6 +429,7 @@ struct m_inode * iget(int dev,int nr)
 			iput(empty);
 		return inode;
 	}
+	/* f. 查找hd1的根i节点没有找到，加载该节点 */
 	if (!empty)
 		return (NULL);
 	/* 3. 初始化inode */
@@ -429,6 +446,7 @@ struct m_inode * iget(int dev,int nr)
 // 所在的设备逻辑块号（或缓冲块），必须首先读取相应设备上的超级块，以获取用于计算逻辑
 // 块号的每块i节点数信息INODES_PER_BLOCK.在计算出i节点所在的逻辑块号后，就把该逻辑块读入
 // 一缓冲块中。然后把缓冲块中相应位置处的i节点内容复制到参数指定的位置处。
+/* 示例：read_inode(inode),其中inode->nr=1，inode->dev为hd1的设备号 */
 static void read_inode(struct m_inode * inode)
 {
 	struct super_block * sb;
@@ -447,7 +465,7 @@ static void read_inode(struct m_inode * inode)
 	block = 2 + sb->s_imap_blocks + sb->s_zmap_blocks +
 		(inode->i_num-1)/INODES_PER_BLOCK;
 	/* 3. 将inode所在逻辑块读入缓冲区，并复制到目标inode中
-	 * 因为是d_inode，因此只复制了前面前面一部分？*/
+	 * 因为是d_inode，因此只复制了m_inode前面前面一部分，*/
 	if (!(bh=bread(inode->i_dev,block)))
 		panic("unable to read i-node block");
 	*(struct d_inode *)inode =
@@ -476,6 +494,7 @@ static void write_inode(struct m_inode * inode)
 		unlock_inode(inode);
 		return;
 	}
+	/* 1. 获取超级块，然后计算i节点所在块号 */
 	if (!(sb=get_super(inode->i_dev)))
 		panic("trying to write inode without device");
     // 该i节点所在的设备逻辑块号＝（启动块+超级块）+i节点位图占用的块数+逻辑块位图占用的块数
@@ -483,6 +502,7 @@ static void write_inode(struct m_inode * inode)
     // 到逻辑块对应i节点的项位置处。
 	block = 2 + sb->s_imap_blocks + sb->s_zmap_blocks +
 		(inode->i_num-1)/INODES_PER_BLOCK;
+	/* 2. 读取i节点到缓冲区，然后同步inode到缓冲区 */
 	if (!(bh=bread(inode->i_dev,block)))
 		panic("unable to read i-node block");
 	((struct d_inode *)bh->b_data)
@@ -490,6 +510,7 @@ static void write_inode(struct m_inode * inode)
 			*(struct d_inode *)inode;
     // 然后置缓冲区已修改标志，而i节点内容已经与缓冲区中的一致，因此修改标志置零。然后释放该
     // 含有i节点的缓冲区，并解锁该i节点。
+    /* 3. 表示缓冲区以修改 */
 	bh->b_dirt=1;
 	inode->i_dirt=0;
 	brelse(bh);

@@ -205,6 +205,7 @@ int sys_chown(const char * filename,int uid,int gid)
 // （用户具有读文件权限）、S_IRWXG（组成员具有读、写和执行权限）等等。对于新创
 // 建的文件，这些属性只应用与将来对文件的访问，创建了只读文件的打开调用也将返回
 // 一个可读写的文件句柄。如果调用操作成功，则返回文件句柄(文件描述符)，否则返回出错码。
+/* 示例：open("/mnt/user/user1/user2/hello.txt", O_RDWR, 0644) */
 int sys_open(const char * filename,int flag,int mode)
 {
 	struct m_inode * inode;
@@ -245,7 +246,8 @@ int sys_open(const char * filename,int flag,int mode)
     // inode是已打开文件的i节点指针。
     /* 3. 将进程1的filp[20]与file_table[64]挂接，并增加引用计数 */
 	(current->filp[fd]=f)->f_count++;
-	/* 4. 获取标准输入设备文件的i节点 */
+	/* 4. 获取标准输入设备文件的i节点 
+	 * a. 获取hello.txt文件节点 */
 	if ((i=open_namei(filename,flag,mode,&inode))<0) {
 		current->filp[fd]=NULL;
 		f->f_count=0;
@@ -288,6 +290,8 @@ int sys_open(const char * filename,int flag,int mode)
 	f->f_mode = inode->i_mode;
 	f->f_flags = flag;
 	f->f_count = 1;
+	/* b. inode为inode_table[32]某一项的地址，这里将inode挂接到file_table[64]
+	 * 的某一项中 */
 	f->f_inode = inode;
 	f->f_pos = 0;
 	return (fd);

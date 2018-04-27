@@ -124,9 +124,11 @@ int new_block(int dev)
     // 文件系统的8块逻辑位图，寻找首个0值bit位，以寻找空闲逻辑块，获取放置该逻辑块的
     // 块号。如果全部扫描完8块逻辑块位图的所有bit位(i >= 8 或 j >= 8192)还没找到0值
     // bit位或者位图所在的缓冲块指针无效(bh=NULL)则返回0退出(没有空闲逻辑块)。
+    /* 1. 获取超级块 */
 	if (!(sb = get_super(dev)))
 		panic("trying to get new block from nonexistant device");
 	j = 8192;
+	/* 2. 在逻辑位图中搜索为0的bit，该位的位置是第i*8192+j */
 	for (i=0 ; i<8 ; i++)
 		if ((bh=sb->s_zmap[i]))
 			if ((j=find_first_zero(bh->b_data))<8192)
@@ -141,6 +143,7 @@ int new_block(int dev)
 	if (set_bit(j,bh->b_data))
 		panic("new_block: bit already set");
 	bh->b_dirt = 1;
+	/* 3. 由位图的信息计算逻辑块号 */
 	j += i*8192 + sb->s_firstdatazone-1;
 	if (j >= sb->s_nzones)
 		return 0;
@@ -148,13 +151,17 @@ int new_block(int dev)
     // 因为刚取得的逻辑块其引用次数一定为1(getblk()中会设置)，因此若不为1则停机。
     // 最后将新逻辑块清零，并设置其已更新标志和已修改标志。然后释放对应缓冲块，返回
     // 逻辑块号。
+    /* 4. 在缓冲区中申请一个空闲的数据块，块号为j，然后将数据清零 */
 	if (!(bh=getblk(dev,j)))
 		panic("new_block: cannot get block");
 	if (bh->b_count != 1)
 		panic("new block: count is != 1");
 	clear_block(bh->b_data);
+	/* 5. 更改标志位，下一次将信息同步到外设。 */
 	bh->b_uptodate = 1;
 	bh->b_dirt = 1;
+	/* 6. 这里不是释放缓冲区，缓冲区在内存一个特定区域，一直占用不会释放，这里只是解除
+	 * 对缓冲区的占用，以便其他进程也能使用这个缓冲区修改内容 */
 	brelse(bh);
 	return j;
 }
@@ -201,9 +208,11 @@ void free_inode(struct m_inode * inode)
     // 现在我们复位i节点对应的节点位图中的bit位。如果该bit位已经等于0，则显示
     // 出错警告信息。最后置i节点位图所在缓冲区已修改标志，并清空该i节点结构
     // 所占内存区。
+    /* 1. 同步节点对应的位图 */
 	if (clear_bit(inode->i_num&8191,bh->b_data))
 		printk("free_inode: bit already cleared.\n\r");
 	bh->b_dirt = 1;
+	/* 2. i节点清零，对应inode_table[32] */
 	memset(inode,0,sizeof(*inode));
 }
 
@@ -220,8 +229,11 @@ struct m_inode * new_inode(int dev)
     // 超级块结构。然后扫描超级块中8块i节点位图，寻找首个0bit位，寻找空闲节点，
     // 获取放置该i节点的节点号。如果全部扫描完还没找到，或者位图所在的缓冲块无效
     // (bh=NULL),则放回先前申请的i节点表中的i节点，并返回NULL退出(没有空闲的i节点)。
+    /* 1. 在inode_table[32]中申请一个空闲节点 */
 	if (!(inode=get_empty_inode()))
 		return NULL;
+	/* 2. 读取超级块，找到第一个0bit位在s_imap[i]的第j位，然后更改缓冲块中的节点位图
+	 * 并设置bh->b_dirt位，该缓冲块将在下一次文件同步中更新到硬盘中 */
 	if (!(sb = get_super(dev)))
 		panic("new_inode with unknown device");
 	j = 8192;
@@ -238,6 +250,7 @@ struct m_inode * new_inode(int dev)
 	if (set_bit(j,bh->b_data))
 		panic("new_inode: bit already set");
 	bh->b_dirt = 1;
+	/* 3. 对i节点属性进行设置 */
 	inode->i_count=1;                           // 引用计数
 	inode->i_nlinks=1;                          // 文件目录项连接数
 	inode->i_dev=dev;                           // i节点所在的设备号

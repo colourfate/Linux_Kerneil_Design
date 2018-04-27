@@ -31,7 +31,13 @@ int file_read(struct m_inode * inode, struct file * filp, char * buf, int count)
 	if ((left=count)<=0)
 		return 0;
 	while (left) {
+		/* 1. 确定文件数据块在外设上的块号。inode中使用i_zone结构来管理文件数据块，
+		 * 文件数据块小于7个时使用i_zone[0]~i_zone[6]来表示外设数据块的块号，文件
+		 * 就分别存在这几个数据块上。filp->f_pos表示要操作文件的位置，文件开始是0
+		 * 每存1个字节加1，因此(filp->f_pos)/BLOCK_SIZE)就是求出要读取的内容在第几
+		 * 个i_zone中 */
 		if ((nr = bmap(inode,(filp->f_pos)/BLOCK_SIZE))) {
+			/* 2. 读取外设中的指定数据块 */
 			if (!(bh=bread(inode->i_dev,nr)))
 				break;
 		} else
@@ -41,6 +47,7 @@ int file_read(struct m_inode * inode, struct file * filp, char * buf, int count)
         // 即为本次操作需读取的字节数chars。如果(BLOCK_SIZE-nr) > left，则说明该块
         // 是需要读取的最后一块数据。反之还需要读取下一块数据。之后调整读写文件指针。
         // 指针前移此次将读取的字节数chars，剩余字节计数left相应减去chars。
+        /* 3. 计算文件指针在这个数据块内的偏移量，然后计算剩余的字节数 */
 		nr = filp->f_pos % BLOCK_SIZE;
 		chars = MIN( BLOCK_SIZE-nr , left );
 		filp->f_pos += chars;
@@ -48,6 +55,7 @@ int file_read(struct m_inode * inode, struct file * filp, char * buf, int count)
         // 若上面从设备上读到了数据，则将p指向缓冲块中开始读取数据的位置，并且复制chars
         // 字节到用户缓冲区buf中。否则往用户缓冲区中填入chars个0值字节。
 		if (bh) {
+			/* 4. 复制这一块中的数据到指定用户空间 */
 			char * p = nr + bh->b_data;
 			while (chars-->0)
 				put_fs_byte(*(p++),buf++);
@@ -91,8 +99,10 @@ int file_write(struct m_inode * inode, struct file * filp, char * buf, int count
     // 创建失败，于是退出循环。否则我们根据该逻辑块号读取设备上的相应逻辑块，若出
     // 错也退出循环。
 	while (i<count) {
+		/* 1. 如果指定i_zone不存在，在缓冲区中申请一个空闲的缓冲块，返回块号 */
 		if (!(block = create_block(inode,pos/BLOCK_SIZE)))
 			break;
+		/* 2. 获得刚申请的缓冲块管理结构 */
 		if (!(bh=bread(inode->i_dev,block)))
 			break;
         // 此时缓冲块指针bh正指向刚读入的文件数据库。现在再求出文件当前读写指针在该
@@ -111,11 +121,14 @@ int file_write(struct m_inode * inode, struct file * filp, char * buf, int count
         // 已写入字节计数值i中，供循环判断使用。接着从用户缓冲区buf中复制c个字节到告诉缓
         // 冲块中p指向的开始位置处。复制完后就释放该缓冲块。
 		pos += c;
+		/* 如inode->i_size=5，内容是"12345"，文件指针在'3'的位置，需要写入5个字符，分别为
+		 * "abcde"，此时pos=7，就会出现下面的情况 */
 		if (pos > inode->i_size) {
 			inode->i_size = pos;
 			inode->i_dirt = 1;
 		}
 		i += c;
+		/* 3. 拷贝buf到缓冲区 */
 		while (c-->0)
 			*(p++) = get_fs_byte(buf++);
 		brelse(bh);

@@ -230,7 +230,7 @@ static struct super_block * read_super(int dev)
     /* 8. 牺牲一个i节点，以防止查找算法返回0 */
 	s->s_imap[0]->b_data[0] |= 1;
 	s->s_zmap[0]->b_data[0] |= 1;
-	free_super(s);
+	free_super(s);		// 对超级块解锁
 	return s;
 }
 
@@ -290,6 +290,7 @@ int sys_umount(char * dev_name)
 // 参数dev_name是设备文件名，dir_name是安装到的目录名，rw_flag被安装文件系统的可
 // 读写标志。将被加载的地方必须是一个目录名，并并且对应的i节点没有被其他程序占用。
 // 若操作成功则返回0，否则返回出错号。
+/* 示例：mount /dev/hd1 /mnt */
 int sys_mount(char * dev_name, char * dir_name, int rw_flag)
 {
 	struct m_inode * dev_i, * dir_i;
@@ -299,10 +300,10 @@ int sys_mount(char * dev_name, char * dir_name, int rw_flag)
     // 首先根据设备文件名找到对应的i节点，以取得其中的设备号。对于块特殊设备文件，
     // 设备号在其i节点的i_zone[0]中。另外，由于文件凶必须在块设备中，因此如果不是
     // 块设备文件，则放回刚取得的i节点dev_i，返回出错码。
-	/* 1. 通过设备名，获取i节点 */
+	/* 1. 通过设备名，获取hd1的i节点 */
 	if (!(dev_i=namei(dev_name)))
 		return -ENOENT;
-	/* 2. 获取其中的设备号 */
+	/* 2. 获取hd1的设备号 */
 	dev = dev_i->i_zone[0];
 	if (!S_ISBLK(dev_i->i_mode)) {
 		iput(dev_i);
@@ -314,10 +315,11 @@ int sys_mount(char * dev_name, char * dir_name, int rw_flag)
     // 或者该i节点的节点号是根文件系统的节点号1，则放回该i节点的返回出错码。另外，如果
     // 该节点不是一个目录文件节点，则也放回该i节点，返回出错码。因为文件系统只能安装
     // 在一个目录名上。
-    /* 3. 释放i节点 */
+    /* 3. 释放hd1的i节点，然后获取/mnt目录的i节点 */
 	iput(dev_i);
 	if (!(dir_i=namei(dir_name)))
 		return -ENOENT;
+	/* 4. 确定/mnt目录的i节点只被引用过一次，并且不是根节点，然后确定该i节点是目录文件 */
 	if (dir_i->i_count != 1 || dir_i->i_num == ROOT_INO) {
 		iput(dir_i);
 		return -EBUSY;
@@ -329,7 +331,7 @@ int sys_mount(char * dev_name, char * dir_name, int rw_flag)
     // 现在安装点也检查完毕，我们开始读取要安装文件系统的超级块信息。如果读取超级块操
     // 作失败，则返回该安装点i节点的dir_i并返回出错码。一个文件系统的超级块首先从超级
     // 块表中进行搜索，如果不在超级块表中就从设备上读取。
-    // 4. 通过设备号读取设备超级块
+    // 5. 通过hd1的设备号读取设备超级块
 	if (!(sb=read_super(dev))) {
 		iput(dir_i);
 		return -EBUSY;
@@ -337,6 +339,7 @@ int sys_mount(char * dev_name, char * dir_name, int rw_flag)
     // 在得到了文件系统超级块之后，我们对它先进行检测一番。如果将要被安装的文件系统已经
     // 安装在其他地方，则放回该i节点，返回出错码。如果将要安装到的i节点已经安装了文件系
     // 统(安装标志已经置位)，则放回该i节点，也返回出错码。
+    /* 6. 确保hd1设备没有被安装在其他地方，且/mnt目录没有挂载其他文件系统 */
 	if (sb->s_imount) {
 		iput(dir_i);
 		return -EBUSY;
@@ -347,6 +350,7 @@ int sys_mount(char * dev_name, char * dir_name, int rw_flag)
 	}
     // 最后设置被安装文件系统超级块的“被安装到i节点”字段指向安装到的目录名的i节点。并设置
     // 安装位置i节点的安装标志和节点已修改标志。然后返回（安装成功）。
+    /* 7. 将/mnt挂载到hd1的超级块上 */
 	sb->s_imount=dir_i;
 	dir_i->i_mount=1;
 	dir_i->i_dirt=1;		/* NOTE! we don't iput(dir_i) */

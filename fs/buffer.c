@@ -73,8 +73,10 @@ int sys_sync(void)
     // 首先调用i节点同步函数，把内存i节点表中所有修改过的i节点写入高速缓冲中。
     // 然后扫描所有高速缓冲区，对已被修改的缓冲块产生写盘请求，将缓冲中数据写入
     // 盘中，做到高速缓冲中的数据与设备中的同步。
+    /* 1. 同步i节点 */
 	sync_inodes();		/* write out inodes into buffers */
 	bh = start_buffer;
+	/* 2. 遍历缓冲区，如果缓冲块已修改，则同步到外设 */
 	for (i=0 ; i<NR_BUFFERS ; i++,bh++) {
 		wait_on_buffer(bh);                 // 等待缓冲区解锁(如果已经上锁的话)
 		if (bh->b_dirt)
@@ -394,7 +396,7 @@ struct buffer_head * bread(int dev,int block)
 {
 	struct buffer_head * bh;
 
-    /* 1. 在缓冲区中得到与dev、block相符合或空闲的缓冲块 */
+    /* 1. 在缓冲区中得到与dev、block相符合或空闲的缓冲块，找不到会阻塞 */
 	if (!(bh=getblk(dev,block)))
 		panic("bread: getblk returned NULL\n");
 	// 新申请的缓冲区没有更新过
