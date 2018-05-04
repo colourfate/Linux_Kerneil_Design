@@ -82,7 +82,9 @@ int copy_mem(int nr,struct task_struct * p)
 	if (data_limit < code_limit)
 		panic("Bad data_limit");
     /* 3. 设置LDT代码段和数据段的基地址，为0x4000000，这是线性地址，解析出来就是：
-     * 页目录项：16，页表项：0，页内偏移：0*/
+     * 页目录项：16，页表项：0，页内偏移：0
+     * 使用task[64]的项号来确定str1进程的段基址，0x4000000=64MB，一个进程享有64MB
+     * 的线性地址 */
 	new_data_base = new_code_base = nr * 0x4000000;		// nr=1
 	p->start_code = new_code_base;
 	set_base(p->ldt[1],new_code_base);
@@ -164,7 +166,7 @@ int copy_process(int nr,long ebp,long edi,long esi,long gs,long none,
 	p->tss.fs = fs & 0xffff;
 	p->tss.gs = gs & 0xffff;
 	/* 7. 记录当前进程的LDT在GDT中的偏移量，即段选择符，nr=1，_LDT(1)=56=0x38=0b00111000
-	 * 特权级3，GDT，第7项 */
+	 * 特权级0，GDT，第7项 */
 	p->tss.ldt = _LDT(nr);                  
 	p->tss.trace_bitmap = 0x80000000;       // 高16位有效
     // 如果当前任务使用了协处理器，就保存其上下文。汇编指令clts用于清除控制寄存器CRO中

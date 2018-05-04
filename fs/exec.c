@@ -149,6 +149,7 @@ static unsigned long copy_strings(int argc,char ** argv,unsigned long *page,
         // 间)。否则不用修改fs值而直接从用户空间取字符串指针到tmp.
 		if (from_kmem == 1)
 			set_fs(new_fs);
+		/* 1. 获取参数在用户空间的地址 */
 		if (!(tmp = (char *)get_fs_long(((unsigned long *)argv)+argc)))
 			panic("argc is wrong");
 		if (from_kmem == 1)
@@ -174,6 +175,7 @@ static unsigned long copy_strings(int argc,char ** argv,unsigned long *page,
 		while (len) {
 			--p; --tmp; --len;
 			if (--offset < 0) {
+				/* 2. offset=4088 */
 				offset = p % PAGE_SIZE;
                 // 如果字符串和字符串数组都在内核空间中，那么为了从内核数据空间
                 // 复制字符串内容，下面会把fs设置为指向内核数据段。
@@ -183,6 +185,7 @@ static unsigned long copy_strings(int argc,char ** argv,unsigned long *page,
                 // 0,表示此时p指针所处的空间内存页面还不存在，则需申请一空闲内
                 // 存页，并将该页面指针填入指针数组，同时也使页面指针pag 指向该
                 // 新页面，若申请不到空闲页面则返回0.
+                /* 3. page[31] */
 				if (!(pag = (char *) page[p/PAGE_SIZE]) &&
 				    !(pag = (char *) page[p/PAGE_SIZE] =
 				      (unsigned long *) get_free_page())) 
@@ -193,6 +196,7 @@ static unsigned long copy_strings(int argc,char ** argv,unsigned long *page,
 
 			}
             // 然后从fs段中复制字符串的1字节到参数和环境空间内存页面pag的offset出。
+            /* 4. 复制参数到新的内存页面的末尾 */
 			*(pag + offset) = get_fs_byte(tmp);
 		}
 	}
@@ -493,8 +497,12 @@ restart_interp:
     // 执行完后，环境参数串信息块位于程序参数串信息块上方，并且p指向程序的第1个
     // 参数串。事实上，p是128KB参数和环境空间中的偏移值。因此如果p=0，则表示环
     // 境变量与参数空间页面已经被占满，容纳不下了。
-    /* 9. 将环境变量和参数复制到进程空间 */
+    /* 9. 不是脚本文件，将环境变量和参数复制到进程空间 */
 	if (!sh_bang) {
+		/* 将envp中的envc个参数复制到一个新页面中，这个页面地址放在page[32]中
+		 * page[32]是专门放置环境变量和参数的空间，总共32*4K字节，p为参数在这个
+		 * 空间中的偏移量，这里page[p/4096]就是新申请的页面，返回新加入参数在
+		 * 128KB参数空间中的偏移量 */
 		p = copy_strings(envc,envp,page,p,0);
 		p = copy_strings(argc,argv,page,p,0);
 		if (!p) {
@@ -549,9 +557,14 @@ restart_interp:
     // 语句之后，p此时更改成以数据段起始处为原点的偏移值，但仍指向参数和环境空
     // 间数据开始处，即已转换成为栈指针值。然后调用内部函数create_tables()在栈中
     // 穿件环境和参数变量指针表，供程序的main()作为参数使用，并返回该栈指针。
-    /* 12. 重新设置页面2的局部描述符表 */
+    /* 12. 重新设置页面2的局部描述符表，段基址不变，仍然是0x4000000的整数倍，修改了
+     * 段限长为64MB，然后将128KB的参数和环境空间页面放置在数据段末端，最后建立映射。
+     * change_ldt返回段限长，这里为64MB，MAX_ARG_PAGES*PAGE_SIZE为参数表占的内存大小
+     * p=MAX_ARG_PAGES*PAGE_SIZE-4-x，x为参数所占字节数，所以最后p为参数放入数据段
+     * 后的偏移量，即：p=64M-4-x */
 	p += change_ldt(ex.a_text,page)-MAX_ARG_PAGES*PAGE_SIZE;
-	/* 13. 在进程的新栈空间中创建参数和环境变量指针管理表 */
+	/* 13. 在进程的新栈空间中创建参数和环境变量指针管理表，返回的地址指向环境管理表
+	 * 的开始处，作为进程的SP指针 */
 	p = (unsigned long) create_tables((char *)p,argc,envc);
     // 接着再修改各字段值为新执行文件的信息。即令进程任务结构代码尾字段end_code
     // 等于执行文件的代码长度a_text；数据尾字段end_data等于执行文件的代码段长度
@@ -576,7 +589,9 @@ restart_interp:
     // 行新执行文件，因此不会返回到原调用系统中断的程序中去了。
     /* 15. 设置进程2开始执行的eip和栈顶指针esp，eip指向栈中存放EIP的位置
      * 由于该线性空间对应的程序内容未加载，也因此会触发一个"页异常"中断，
-     * 跳转到page.s/page_fault中执行 */
+     * 跳转到page.s/page_fault中执行
+     * ex.a_entry为程序入口的偏移量，p为SP指针在64M数据段中的偏移量，段在12中已经设置，
+     * 为0x4000000的整数倍 */
 	eip[0] = ex.a_entry;		/* eip, magic happens :-) */
 	eip[3] = p;			/* stack pointer */
 	return 0;

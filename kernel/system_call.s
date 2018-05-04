@@ -110,7 +110,7 @@ system_call:
 # 注意,在Linux 0.11 中内核给任务分配的代码和数据内存段是重叠的，他们的段基址和段限长相同。
 ## fs设置为0x17，特权级3，LDT第1项
 	movl $0x17,%edx		# fs points to local data space
-	mov %dx,%fs
+	mov %dx,%fs		# 内核使用fs寄存器存储用户进程LDT中的数据段描述符
 	call sys_call_table(,%eax,4)
 	pushl %eax                          # eax是系统调用的返回值，也就是last_pid
 # 如果不在就绪状态(state != 0)或时间片已用完(counter = 0),则去执行调度程序。

@@ -158,6 +158,9 @@ void free_page(unsigned long addr)
 // 程0和1）的页表所占据的页面在进程被创建时由内核为其主内存区申请得到。每个页表
 // 项对应1耶物理内存，因此一个页表最多可映射4MB的物理内存。
 // 参数：from - 起始线性基地址；size - 释放的字节长度。
+/* 从from开始寻找，释放若干页表，保证总释放的字节数大于size
+ * from: 线性地址，只包含页目录偏移，页表偏移和页内偏移为0
+ * size: 释放的字节数 */
 int free_page_tables(unsigned long from,unsigned long size)
 {
 	unsigned long *pg_table;
@@ -177,7 +180,9 @@ int free_page_tables(unsigned long from,unsigned long size)
     // 项占4字节，并且由于页目录表从物理地址0开始存放，因此实际目录项指针＝目录
     // 项号<<2，也即(from>>20)。& 0xffc确保目录项指针范围有效，即用于屏蔽目录项
     // 指针最后2位。因为只移动了20位，因此最后2位是页表项索引的内容，应屏蔽掉。
+	/* 1. 计算需要释放的页表数 */
 	size = (size + 0x3fffff) >> 22;
+	/* 2. 得到页目录的地址 */
 	dir = (unsigned long *) ((from>>20) & 0xffc); /* _pg_dir = 0 */
     // 此时size是释放的页表个数，即页目录项数，而dir是起始目录项指针。现在开始
     // 循环操作页目录项，依次释放每个页表中的页表项。如果当前目录项无效（P位＝0）
@@ -187,16 +192,21 @@ int free_page_tables(unsigned long from,unsigned long size)
     // 当一个页表所有表项都处理完毕就释放该页表自身占据的内存页面，并继续处理下
     // 一页目录项。最后刷新也页变换高速缓冲，并返回0.
 	for ( ; size-->0 ; dir++) {
+		/* 3. 跳过P为0的页目录项 */
 		if (!(1 & *dir))
 			continue;
+		/* 4. 得到页表地址 */
 		pg_table = (unsigned long *) (0xfffff000 & *dir);  // 取页表地址
+		/* 5. 遍历页表，若页表项的P=1，则释放对应页，然后再将页表项的内容清0 */
 		for (nr=0 ; nr<1024 ; nr++) {
 			if (1 & *pg_table)                          // 若该项有效，则释放对应页。 
 				free_page(0xfffff000 & *pg_table);
 			*pg_table = 0;                              // 该页表项内容清零。
 			pg_table++;                                 // 指向页表中下一项。
 		}
+		/* 6. 将整个页表清0，页面引用计数减1 */
 		free_page(0xfffff000 & *dir);                   // 释放该页表所占内存页面。
+		/* 7. 页目录项置0，P=0 */
 		*dir = 0;                                       // 对应页表的目录项清零
 	}
 	invalidate();                                       // 刷新页变换高速缓冲。
@@ -254,11 +264,15 @@ int copy_page_tables(unsigned long from,unsigned long to,long size)
         /* 5. 取出源页目录项的值，即指向页表的地址             
          * 这里  from_dir=0x0，因此from_page_table=0x1000(第一个页表)*/
 		from_page_table = (unsigned long *) (0xfffff000 & *from_dir);
-		/* 6. 申请一个物理页面，第二个物理页？ */
+		/* 6. 申请一个物理页面 */
 		if (!(to_page_table = (unsigned long *) get_free_page()))
 			return -1;	/* Out of memory, see freeing */
         /* 7. 给目标页目录项赋值，并加上页面属性。
-         * 这里to_dir=0x40，表示第16页目录项 */
+         * 这里to_dir=0x40，表示第16页目录项，这个页目录项指向刚申请的内存页面，
+         * 这个内存页面在16MB以内，位于主内存区域，该区域在刚开机时就已经建立好了
+         * 映射关系，内核可以通过恒等映射来访问该页面
+         * 此时这个页面不只是可以通过恒等映射来访问，也可以通过0x40这个页目录项
+         * 直接找到该页面，就是说此时存在两套映射关系 */
 		*to_dir = ((unsigned long) to_page_table) | 7;
 		nr = (from==0)?0xA0:1024;
         /* 8. 复制父进程的页表，也就是把0x1000开始内容复制到倒数第二个
@@ -269,7 +283,7 @@ int copy_page_tables(unsigned long from,unsigned long to,long size)
 			this_page = *from_page_table;
 			if (!(1 & this_page))
 				continue;
-			// 将这个页面改为只读
+			// 将~2=0b101，这里将P位设置为1，R/W位设置为0，只能读父进程的页表，而不能写
 			this_page &= ~2;
 			*to_page_table = this_page;
             /* 9. 对1MB以上的页地址进行引用计数 */
@@ -329,7 +343,7 @@ unsigned long put_page(unsigned long page,unsigned long address)
 	else {
 		if (!(tmp=get_free_page()))
 			return 0;
-		*page_table = tmp|7;
+		*page_table = tmp|7;	// P位置1
 		page_table = (unsigned long *) tmp;
 	}
     // 最后在找到的页表page_table中设置相关页表内容，即把物理页面page的地址填入
@@ -359,6 +373,7 @@ void un_wp_page(unsigned long * table_entry)
     // 中置R/W标志(可写),并刷新页变换高速缓冲，然后返回。即如果该内存页面此时只
     // 被一个进程使用，并且不是内核中的进程，就直接把属性改为可写即可，不用再重
     // 新申请一个新页面。
+    /* 1. 若需要写的页面没有被共享，只需将其属性设置为可读可写 */
 	old_page = 0xfffff000 & *table_entry;
 	if (old_page >= LOW_MEM && mem_map[MAP_NR(old_page)]==1) {
 		*table_entry |= 2;
@@ -370,6 +385,7 @@ void un_wp_page(unsigned long * table_entry)
     // 面的页面映射字节数组递减1。然后将指定页表项内容更新为新页面地址，并置可读
     // 写等标志（U/S、R/W、P）。在刷新页变换高速缓冲之后，最后将原页面内容复制
     // 到新页面上。
+    /* 2. 新申请一个页面，挂接到进程页表项中，并设置为可读可写 */
 	if (!(new_page=get_free_page()))
 		oom();
 	if (old_page >= LOW_MEM)
@@ -634,7 +650,8 @@ void do_no_page(unsigned long error_code,unsigned long address)
     // 并映射到指定线性地址处。进程任务结构字段start_code是线性地址空间中进程代
     // 码段地址，字段end_data是代码加数据长度。对于Linux0.11内核，它的代码段和
     // 数据段其实基址相同。
-    /* 1. 不是加载程序导致的缺页，直接申请页面，然后返回 */
+    /* 1. 进程是否已经把程序加载进来，或产生缺页中断的线性地址是否超出了程序代
+     * 码的末端 */
 	if (!current->executable || tmp >= current->end_data) {
 		get_empty_page(address);
 		return;
@@ -697,6 +714,7 @@ void mem_init(long start_mem, long end_mem)
     // 即各项字节全部设置成USED(100)。PAGING_PAGES被定义为(PAGING_MEMORY>>12)，
     // 即1MB以上所有物理内存分页后的内存页面数(15MB/4KB = 3840).
 	HIGH_MEMORY = end_mem;                  // 设置内存最高端(16MB)
+	/* 1. 1MB以上的页面标记为USED */
 	for (i=0 ; i<PAGING_PAGES ; i++)
 		mem_map[i] = USED;
     // 然后计算主内存区起始内存start_mem处页面对应内存映射字节数组中项号i和主内存区页面数。
@@ -705,6 +723,7 @@ void mem_init(long start_mem, long end_mem)
 	i = MAP_NR(start_mem);      // 主内存区其实位置处页面号
 	end_mem -= start_mem;
 	end_mem >>= 12;             // 主内存区中的总页面数
+	/* 2. 主内存区页面占用清零，也就是6MB以上清零 */
 	while (end_mem-->0)
 		mem_map[i++]=0;         // 主内存区页面对应字节值清零
 }
