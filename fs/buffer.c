@@ -105,6 +105,9 @@ int sync_dev(int dev)
 		if (bh->b_dev != dev)               // 不是设备dev的缓冲块则继续
 			continue;
 		wait_on_buffer(bh);                     // 等待缓冲区解锁
+		/* 将缓冲区上锁，然后将脏标志设置为0，然后交给硬件开始写盘
+		 * 注意写盘操作是由硬件完成的，不占用内核，而且写盘速度很慢，因此这里内核
+		 * 一次将所有脏的块都上锁，然后更新脏标志为0，之后等待它们一次同步到硬盘*/
 		if (bh->b_dev == dev && bh->b_dirt)
 			ll_rw_block(WRITE,bh);
 	}
@@ -270,8 +273,7 @@ struct buffer_head * get_hash_table(int dev, int block)
         // 第一次使用，缓冲区为空，一定返回NULL
 		if (!(bh=find_buffer(dev,block)))
 			return NULL;
-        // 对该缓冲块增加引用计数，并等待该缓冲块解锁。由于经过了睡眠状态，
-        // 因此有必要在验证该缓冲块的正确性，并返回缓冲块头指针。
+        /* 发现可以共享，引用计数加1 */
 		bh->b_count++;
 		wait_on_buffer(bh);
 		if (bh->b_dev == dev && bh->b_blocknr == block)
@@ -289,7 +291,11 @@ struct buffer_head * get_hash_table(int dev, int block)
  *
  * The algoritm is changed: hopefully better, and an elusive bug removed.
  */
-// 下面宏用于同时判断缓冲区的修改标志和锁定标志，并且定义修改标志的权重要比锁定标志大。
+/* 0：没有脏，且没有加锁的缓冲块
+ * 1：没有脏，但加锁的缓冲块
+ * 2：脏，但没有加锁的缓冲块
+ * 3：脏，且加锁的缓冲块
+ */
 #define BADNESS(bh) (((bh)->b_dirt<<1)+(bh)->b_lock)
 // 在缓冲区中得到与dev、block相符合或空闲的缓冲块
 struct buffer_head * getblk(int dev,int block)
@@ -320,7 +326,11 @@ repeat:
         // 没有修改也没有锁定标志置位，则说明已为指定设备上的块取得对应的高速
         // 缓冲块，则退出循环。否则我们就继续执行本循环，看看能否找到一个BANDNESS()
         // 最小的缓冲块。
-        /* 3. bh=0, BADNESS(tmp)=00, 找到空闲的缓冲块 */
+        /* 3. bh=0, BADNESS(tmp)=00, 找到空闲的缓冲块
+         * 找到空闲缓冲块，下面从这些空闲的缓冲块中找到最合适的。
+         * 第一次bh=NULL，bh=tmp
+         * 后面开始循环比较tmp和bh哪个更加合适(BADNESS更小)，找到合适的，将bh=tmp，如果
+         * 此时的BADNESS(bh)==0，则已经是最合适的状态，直接退出。*/
 		if (!bh || BADNESS(tmp)<BADNESS(bh)) {
 			bh = tmp;
 			if (!BADNESS(tmp))
@@ -328,27 +338,25 @@ repeat:
 		}
 /* and repeat until we find something good */
 	} while ((tmp = tmp->b_next_free) != free_list);
-    // 如果循环检查发现所有缓冲块都正在被使用(所有缓冲块的头部引用计数都>0)中，
-    // 则睡眠等待有空闲缓冲块可用。当有空闲缓冲块可用时本进程会呗明确的唤醒。
-    // 然后我们跳转到函数开始处重新查找空闲缓冲块。
+    /* 这是所有缓冲块的b_count都大于0的情况，说明没有空闲缓冲块 */
 	if (!bh) {
 		sleep_on(&buffer_wait);
 		goto repeat;
 	}
     // 执行到这里，说明我们已经找到了一个比较合适的空闲缓冲块了。于是先等待该缓冲区
     // 解锁。如果在我们睡眠阶段该缓冲区又被其他任务使用的话，只好重复上述寻找过程。
-    /* 4. 缓冲区没有加锁，不用等待 */
+    /* 4. 如果得到的是一个加锁的空闲缓冲块，则等待解锁 */
 	wait_on_buffer(bh);
 	if (bh->b_count)
 		goto repeat;
-    // 如果该缓冲区已被修改，则将数据写盘，并再次等待缓冲区解锁。同样地，若该缓冲区
-    // 又被其他任务使用的话，只好再重复上述寻找过程。
+    /* 4.1 若解锁后，缓冲区还是脏的，立即同步到硬盘，同步完成后等待解锁 */
 	while (bh->b_dirt) {
 		sync_dev(bh->b_dev);
 		wait_on_buffer(bh);
 		if (bh->b_count)
 			goto repeat;
 	}
+	/* 这里开始得到的是没加锁，且不是脏的空闲缓冲块 */
 /* NOTE!! While we slept waiting for this block, somebody else might */
 /* already have added "this" block to the cache. check it */
     // 在高速缓冲hash表中检查指定设备和块的缓冲块是否乘我们睡眠之际已经被加入
@@ -370,7 +378,8 @@ repeat:
 	/* 7. 修改这个结构的一些值 */
 	bh->b_dev=dev;
 	bh->b_blocknr=block;
-	/* 8. 重新插入链表尾部，并让hash_table[154]指向这个结构 */
+	/* 8. 重新插入链表尾部，并让hash_table[154]指向这个结构
+	 * 从链表删除然后重新插入目的是调整这个缓冲区的位置*/
 	insert_into_queues(bh);
 	return bh;
 }
@@ -408,7 +417,7 @@ struct buffer_head * bread(int dev,int block)
     // 冲区，返回NULL，退出。
     /* 2. 将缓冲块与请求项结构相挂接，并开始读取硬盘（使用中断读取） */
 	ll_rw_block(READ,bh);
-	/* 3. 挂起等待硬盘读取完毕 */
+	/* 3. 挂起等待硬盘读取完毕，在end_request(1)中唤醒 */
 	wait_on_buffer(bh);
 	/* 4. 读取完毕后，bh->b_uptodate=1，返回bh */
 	if (bh->b_uptodate)

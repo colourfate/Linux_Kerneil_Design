@@ -277,7 +277,8 @@ static void read_intr(void)
 		do_hd = &read_intr;
 		return;
 	}
-	/* 3. 下一次进入读取完成，从这里返回 */
+	/* 3. 已经将一个硬盘块的内容读进缓冲区，将b_uptodata标准更新为1
+	 * 然后CURRENT = CURRENT->next 指向下一个请求*/
 	end_request(1);
 	do_hd_request();
 }

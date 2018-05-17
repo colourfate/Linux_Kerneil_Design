@@ -52,7 +52,7 @@ static inline int send_sig(long sig,struct task_struct * p,int priv)
     // 即是自己），或者当前进程是超级用婚，则向进程p发送信号sig，即在进程p位图中添加该
     // 信号，否则出错退出。其中suser()定义为(current->euid==0)，用于判断是否是超级用户。
 	if (priv || (current->euid==p->euid) || suser())
-		p->signal |= (1<<(sig-1));
+		p->signal |= (1<<(sig-1));	// 将信号位图置1
 	else
 		return -EPERM;
 	return 0;
@@ -93,9 +93,9 @@ int sys_kill(int pid,int sig)
 		if (*p && (*p)->pgrp == current->pid) 
 			if ((err=send_sig(sig,*p,1)))           // 强制发送信号
 				retval = err;
-	} else if (pid>0) while (--p > &FIRST_TASK) {
+	} else if (pid>0) while (--p > &FIRST_TASK) {	//找到需要kill的进程
 		if (*p && (*p)->pid == pid) 
-			if ((err=send_sig(sig,*p,0)))
+			if ((err=send_sig(sig,*p,0)))			// 发送信号
 				retval = err;
 	} else if (pid == -1) while (--p > &FIRST_TASK) {
 		if ((err = send_sig(sig,*p,0)))

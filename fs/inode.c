@@ -349,20 +349,19 @@ struct m_inode * get_pipe_inode(void)
 {
 	struct m_inode * inode;
 
-    // 首先从内存i节点表中取得一个空闲i节点。如果找不到空闲i节点则返回NULL。然后为
-    // 该i节点申请一页内存，并让节点的i_size字段指向该页面。如果已没有空闲内存，
-    // 则释放该i节点，并返回NULL
+    // 1. 从内存i节点表中取得一个空闲i节点.
 	if (!(inode = get_empty_inode()))
 		return NULL;
+	// 2. 为该i节点申请一页内存，并让节点的i_size字段指向该页面。
 	if (!(inode->i_size=get_free_page())) {
 		inode->i_count = 0;
 		return NULL;
 	}
-    // 然后设置该i节点的引用计数为2，并复位管道头尾指针。i节点逻辑块号数组i_zone[]
-    // 的i_zone[0]和i_zone[1]中分别用来存放管道头和管道尾指针。最后设置i节点是管
-    // 道i节点标志并返回该i节点号。
+    // 3. 设置该i节点的引用计数为2，并复位管道头尾指针。i节点逻辑块号数组i_zone[]
+    // 的i_zone[0]和i_zone[1]中分别用来存放管道头和管道尾指针。
 	inode->i_count = 2;	/* sum of readers/writers */
 	PIPE_HEAD(*inode) = PIPE_TAIL(*inode) = 0;
+	// 4. 设置i节点是管道i节点标志
 	inode->i_pipe = 1;
 	return inode;
 }

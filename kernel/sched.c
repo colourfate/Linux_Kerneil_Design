@@ -156,7 +156,8 @@ void schedule(void)
             // 如果信号位图中除被阻塞的信号外还有其他信号，并且任务处于可中断状态，则
             // 置任务为就绪状态。其中'~(_BLOCKABLE & (*p)->blocked)'用于忽略被阻塞的信号，但
             // SIGKILL 和SIGSTOP不能呗阻塞。
-            /* a. 发现进程1接收到了信号，并且处于可中断等待状态，将进程1设置为就绪态 */
+            /* a. 发现进程1接收到了信号，并且处于可中断等待状态，将进程1设置为就绪态 
+			 * 将收到信号的进程设置为就绪态 */
 			if (((*p)->signal & ~(_BLOCKABLE & (*p)->blocked)) &&
 			(*p)->state==TASK_INTERRUPTIBLE)
 				(*p)->state=TASK_RUNNING;
@@ -178,12 +179,9 @@ void schedule(void)
 			if ((*p)->state == TASK_RUNNING && (*p)->counter > c)
 				c = (*p)->counter, next = i;
 		}
-        // 如果比较得出有counter值不等于0的结果，或者系统中没有一个可运行的任务存在(此时c
-        // 仍然为-1，next=0),则退出while(1)_的循环，执行switch任务切换操作。否则就根据每个
-        // 任务的优先权值，更新每一个任务的counter值，然后回到while(1)循环。counter值的计算
-        // 方式counter＝counter/2 + priority.注意：这里计算过程不考虑进程的状态。
 		/* 3. 这里若没有就绪态的进程，c=-1，next=0，仍然退出循环 */
 		if (c) break;
+		/* 重新分配时间片 */
 		for(p = &LAST_TASK ; p > &FIRST_TASK ; --p)
 			if (*p)
 				(*p)->counter = ((*p)->counter >> 1) +
@@ -471,7 +469,7 @@ void do_timer(long cpl)
 	else
 		current->stime++;
 
-    // 如果有定时器存在，则将链表第1个定时器的值减1.如果已等于0，则调用相应的
+    // 如果有定时器存在，则将链表第1个定时器的值减1. 如果已等于0，则调用相应的
     // 处理程序，并将该处理程序指针置空。然后去掉该项定时器。next_timer是定时器
     // 链表的头指针。
 	if (next_timer) {

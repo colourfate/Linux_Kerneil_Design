@@ -68,7 +68,9 @@ static void add_request(struct blk_dev_struct * dev, struct request * req)
 	req->next = NULL;
 	cli();
 	if (req->bh)
+		/* 先去除缓冲块脏的标志 */
 		req->bh->b_dirt = 0;
+	/* 0. 当前设备空闲时，直接开始请求 */
 	if (!(tmp = dev->current_request)) {
 		/* 1. 这里是将设置好的request挂接到blk_dev[3]上 */
 		dev->current_request = req;
@@ -82,6 +84,8 @@ static void add_request(struct blk_dev_struct * dev, struct request * req)
 		    !IN_ORDER(tmp,tmp->next)) &&
 		    IN_ORDER(req,tmp->next))
 			break;
+	/* 3. 如果硬盘忙，则将请求插入到第二个请求项，下一次直接处理该请求
+	 * 这里是类似栈的结构，先入后出（FILO）*/
 	req->next=tmp->next;
 	tmp->next=req;
 	sti();
@@ -125,11 +129,13 @@ repeat:
 		if (req->dev<0)
 			break;
 /* if none found, sleep on new requests: check for rw_ahead */
+	/* 如果没有空闲请求项，则挂起本进程 */
 	if (req < request) {
 		if (rw_ahead) {
 			unlock_buffer(bh);
 			return;
 		}
+		/* 在end_request(1)中唤醒，说明已经读盘完毕，释放了新的请求项 */
 		sleep_on(&wait_for_request);
 		goto repeat;
 	}

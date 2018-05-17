@@ -64,17 +64,16 @@ int sys_signal(int signum, long handler, long restorer)
 {
 	struct sigaction tmp;
 
-    // 首先验证信号值在有效范围(1-32)内，并且不得是信号SIGKILL(和SIGSTOP)。因为这
+    // 1. 首先验证信号值在有效范围(1-32)内，并且不得是信号SIGKILL(和SIGSTOP)。因为这
     // 两个信号不能被进程捕获。
 	if (signum<1 || signum>32 || signum==SIGKILL)
 		return -1;
-    // 然后根据提供的参数组建sigaction结构内容。sa_handler是指定的信号处理句柄(函数)。
-    // sa_mask是执行信号处理句柄时的信号屏蔽码。sa_flags是执行时的一些标志组合。这里
-    // 设定该信号处理句柄只使用1次后就恢复到默认值，并允许信号在自己的处理句柄中收到。
+    /* 2. 绑定信号处理函数 */
 	tmp.sa_handler = (void (*)(int)) handler;
 	tmp.sa_mask = 0;
 	tmp.sa_flags = SA_ONESHOT | SA_NOMASK;
-	tmp.sa_restorer = (void (*)(void)) restorer;        // 保存恢复处理函数指针
+	/* 3. 绑定现场恢复函数 */
+	tmp.sa_restorer = (void (*)(void)) restorer;
     // 接着取该信号原来的处理句柄，并设置该信号的sigaction结构，最后返回原信号句柄。
 	handler = (long) current->sigaction[signum-1].sa_handler;
 	current->sigaction[signum-1] = tmp;
@@ -163,13 +162,15 @@ void do_signal(long signr,long eax, long ebx, long ecx, long edx,
     // 应该被屏蔽的信号集。同时，引起本信号句柄执行的信号也会被屏蔽。不过若
     // sa_flags中使用了SA_NOMASK标志，那么引起本信号句柄执行的信号将不会被屏蔽掉。
     // 如果允许信号自己的处理句柄程序收到信号自己，则也需要将进程的信号阻塞码压入堆栈。
+    /* 1. 将eip指向信号处理函数 */
 	*(&eip) = sa_handler;
 	longs = (sa->sa_flags & SA_NOMASK)?7:8;
     // 将原调用程序的用户堆栈指针向下扩展7(8)个字长(用来存放调用信号句柄的参数等)，
     // 并检查内存使用情况(例如如果内存超界则分配新页等)
+    /* 2. 用户栈增长7或8个字节用于存放当前进程的寄存器值 */
 	*(&esp) -= longs;
 	verify_area(esp,longs*4);
-    // 在用户堆栈中从下道上存放sa_restorer、信号signr、屏蔽码blocked(如果SA_NOMASK
+    // 3. 在用户栈中从下到上存放sa_restorer、信号signr、屏蔽码blocked(如果SA_NOMASK
     // 置位)、eax,ecx,edx,eflags和用户程序原代码指针。
 	tmp_esp=esp;
 	put_fs_long((long) sa->sa_restorer,tmp_esp++);

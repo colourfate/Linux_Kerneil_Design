@@ -15,39 +15,37 @@
 int read_pipe(struct m_inode * inode, char * buf, int count)
 {
 	int chars, size, read = 0;
-
-    // 如果需要读取的字节计数count大于0，我们就循环执行以下操作。在循环读操作
-    // 过程中，若当前管道中没有数据（size=0），则唤醒等待该节点的进程，这通常
-    // 是写管道进程。如果已没有写管道者，即i节点引用计数值小于2，则返回已读字
-    // 节数退出。否则在该i节点上睡眠，等待信息。宏PIPE_SIZE定义在fs.h中。
+    
 	while (count>0) {
+		/* 0. size表示还有多少未读数据，size==0，说明管道中没有数据可供读取 */
 		while (!(size=PIPE_SIZE(*inode))) {
-			wake_up(&inode->i_wait);
+			wake_up(&inode->i_wait); // 唤醒写进程
 			if (inode->i_count != 2) /* are there any writers? */
 				return read;
-			sleep_on(&inode->i_wait);
+			sleep_on(&inode->i_wait);// 如果还有写进程，挂起本进程
 		}
-        // 此时说明管道(缓冲区)中有数据。于是我们取管道尾指针到缓冲区末端的字
-        // 节数chars。如果其大于还需要读取的字节数count，则令其等于count。如果
-        // chars大于当前管道中含有数据的长度size，则令其等于size。然后把需读字
-        // 节数count减去此次可读的字节数chars，并累加已读字节数read.
+        /* 1. chars表示管道中还剩余的字节数 */
 		chars = PAGE_SIZE-PIPE_TAIL(*inode);
+		/* 2. 剩余字节数大约需读取的字节数，说明读取的内容在一页的范围内 */
 		if (chars > count)
 			chars = count;
+		/* 3. 要读的数据大于管道剩余未读的数据，说明需要阻塞等待数据写入 */
 		if (chars > size)
 			chars = size;
+		/* 4. 到这里chars为本次实际需要读取的字节数，总共需要读入字节数count减少
+		 * 已读入字节数read增加*/
 		count -= chars;
 		read += chars;
-        // 再令size指向管道尾指针处，并调整当前管道尾指针(前移chars字节)。若尾
-        // 指针超过管道末端则绕回。然后将管道中的数据复制到用户缓冲区中。对于
-        // 管道i节点，其i_size字段中是管道缓冲块指针。
+        // 5. size指向当前管道尾指针处，目的是在while中作为指针拷贝到用户空间
 		size = PIPE_TAIL(*inode);
+		/* 6. 本次需读出chars字节，移动尾指针，若尾指针超过一页，则回滚到页首 */
 		PIPE_TAIL(*inode) += chars;
 		PIPE_TAIL(*inode) &= (PAGE_SIZE-1);
+		/* 7. 拷贝内容到用户空间 */
 		while (chars-->0)
 			put_fs_byte(((char *)inode->i_size)[size++],buf++);
 	}
-    // 当此次读管道操作结束，则唤醒等待该管道的进程，并返回读取的字节数。
+    /* 8. 读取完毕，说明管道已有剩余空间了，唤醒写进程 */
 	wake_up(&inode->i_wait);
 	return read;
 }
@@ -58,20 +56,15 @@ int write_pipe(struct m_inode * inode, char * buf, int count)
 {
 	int chars, size, written = 0;
 
-    // 如果要写入的字节数count大于0，那么我们就循环执行以下操作。在循环操作过程
-    // 中，若当前管道中没有已经满了(空闲空间size = 0),则唤醒等待该节点的进程，
-    // 通常唤醒的是读管道进程。如果已没有读管道者，即i节点引用计数值小于2，则
-    // 向当前进程发送SIGPIPE信号，并返回已写入的字节数退出；若写入0字节，则返回
-    // -1.否则让当前进程在该i节点睡眠，以等待读管道进程读取数据，从而让管道腾出
-    // 空间。宏PIPE_SIZE()、PIPE_HEAD()等定义在文件fs.h中。
 	while (count>0) {
+		/* 1. size表示管道中还有多少空间可供写入，等于0表示空间以写满 */
 		while (!(size=(PAGE_SIZE-1)-PIPE_SIZE(*inode))) {
-			wake_up(&inode->i_wait);
+			wake_up(&inode->i_wait);			// 唤醒读进程
 			if (inode->i_count != 2) { /* no readers */
 				current->signal |= (1<<(SIGPIPE-1));
 				return written?written:-1;
 			}
-			sleep_on(&inode->i_wait);
+			sleep_on(&inode->i_wait);			// 写进程挂起
 		}
         // 程序执行到这里表示管道缓冲区中有可写空间size.于是我们管道头指针到缓冲区
         // 末端空间字节数chars。写管道操作是从管道头指针处开始写的。如果chars大于还
@@ -94,7 +87,7 @@ int write_pipe(struct m_inode * inode, char * buf, int count)
 		while (chars-->0)
 			((char *)inode->i_size)[size++]=get_fs_byte(buf++);
 	}
-    // 当此次写管道操作结束，则唤醒等待管道的进程，返回已写入的字节数，退出。
+    // 写操作结束，此时已经有数据可供读取，唤醒读进程。注意，这里只是唤醒，没有切换
 	wake_up(&inode->i_wait);
 	return written;
 }
@@ -103,6 +96,12 @@ int write_pipe(struct m_inode * inode, char * buf, int count)
 // 在fildes所指的数组中创建一对文件句柄(描述符)。这对句柄指向一管道i节点。
 // 参数：filedes - 文件句柄数组。fildes[0]用于读管道数据，fildes[1]向管道写入数据。
 // 成功时返回0，出错时返回-1.
+/* current->filp[fd[0]] = file_table[x]
+ * current->filp[fd[1]] = file_table[y]
+ * file_table[x].f_mode = 1 读
+ * file_table[y].f_mode = 2 写
+ * file_table[x].f_inode = file_table[y].f_inode 
+ */
 int sys_pipe(unsigned long * fildes)
 {
 	struct m_inode * inode;
@@ -110,7 +109,7 @@ int sys_pipe(unsigned long * fildes)
 	int fd[2];
 	int i,j;
 
-    // 首先从系统文件表中取两个空闲项(引用计数字段为0的项)，并分别设置引用计数为1。
+    // 1. 首先从file_table[32]中取两个空闲项，并分别设置引用计数为1。
     // 若只有1个空闲项，则释放该项(引用计数复位).若没有找到两个空闲项，则返回-1.
 	j=0;
 	for(i=0;j<2 && i<NR_FILE;i++)
@@ -120,10 +119,7 @@ int sys_pipe(unsigned long * fildes)
 		f[0]->f_count=0;
 	if (j<2)
 		return -1;
-    // 针对上面取得的两个文件表结构项，分别分配一文件句柄号，并使用进程文件结构指针
-    // 数组的两项分别指向这两个文件结构。而文件句柄即是该数组的索引号。类似的，如果
-    // 只有一个空闲文件句柄，则释放该句柄(置空相应数组项)。如果没有找到两个空闲句柄，
-    // 则释放上面获取的两个文件结构项(复位引用计数值)，并返回-1.
+    // 2. 在filp[20]中挂接申请到的file_table项
 	j=0;
 	for(i=0;j<2 && i<NR_OPEN;i++)
 		if (!current->filp[i]) {
@@ -136,21 +132,21 @@ int sys_pipe(unsigned long * fildes)
 		f[0]->f_count=f[1]->f_count=0;
 		return -1;
 	}
-    // 然后利用函数get_pipe_inode()申请一个管道使用的i节点，并为管道分配一页内存作为
-    // 缓冲区。如果不成功，则相应释放两个文件句柄和文件结构项，并返回-1.
+    // 3. 利用函数get_pipe_inode()申请一个管道使用的i节点，并为管道分配一页内存作为
+    // 缓冲区。
 	if (!(inode=get_pipe_inode())) {
 		current->filp[fd[0]] =
 			current->filp[fd[1]] = NULL;
 		f[0]->f_count = f[1]->f_count = 0;
 		return -1;
 	}
-    // 如果管道i节点申请成功，则对两个文件结构进行初始化操作，让他们都指向同一个管道
-    // i节点，并把读写指针都置零。第1个文件结构的文件模式置为读，第2个文件结构的文件
-    // 模式置为写。最后将文件句柄数组复制到对应的用户空间数组中，成功返回0，退出。
+    // 4. 对两个文件结构进行初始化操作，让他们都指向同一个管道i节点，并把读写指针都置零。最后将文件句柄数组复制到对应的用户空间数组中，成功返回0，退出。
 	f[0]->f_inode = f[1]->f_inode = inode;
 	f[0]->f_pos = f[1]->f_pos = 0;
+	// 5. 第1个文件结构的文件模式置为读，第2个文件结构的文件模式置为写。
 	f[0]->f_mode = 1;		/* read */
 	f[1]->f_mode = 2;		/* write */
+	// 6. 返回文件描述符给用户
 	put_fs_long(fd[0],0+fildes);
 	put_fs_long(fd[1],1+fildes);
 	return 0;
