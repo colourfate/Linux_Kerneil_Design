@@ -26,7 +26,7 @@ int read_pipe(struct m_inode * inode, char * buf, int count)
 		}
         /* 1. chars表示管道中还剩余的字节数 */
 		chars = PAGE_SIZE-PIPE_TAIL(*inode);
-		/* 2. 剩余字节数大约需读取的字节数，说明读取的内容在一页的范围内 */
+		/* 2. 剩余字节数大于需读取的字节数，说明读取的内容在一页的范围内 */
 		if (chars > count)
 			chars = count;
 		/* 3. 要读的数据大于管道剩余未读的数据，说明需要阻塞等待数据写入 */
